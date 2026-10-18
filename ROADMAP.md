@@ -24,8 +24,8 @@
 ## 4. Repeatable validation — infrastructure implemented
 
 - Offline core checks and archive-verifier rejection cases pass locally.
-- GitHub Actions defines native macOS builds and archive verification; hosted
-  execution remains to be observed after the source is published.
+- GitHub Actions passed core, SSH, archive, and native build checks on macOS
+  15.7.9 for arm64 and x86_64. The recorded run is linked in the validation notes.
 - A disposable local SSH integration harness uses temporary keys and isolated
   trust files. See [VALIDATION.md](docs/VALIDATION.md) for its observed results.
 - Real Linux deployment and physical sleep/wake trials remain manual acceptance
@@ -38,8 +38,8 @@
 - Clean extraction, bundle signature, architecture, and deployment-target checks.
 - Optional Developer ID signing/notarization hooks; credentials and a real
   notarized distribution are still pending.
-- Source publication, hosted CI, additional architectures, and minimum-OS runtime
-  validation remain separate release gates.
+- Source is public on GitHub, with native arm64 and x86_64 CI preview artifacts.
+  Minimum-OS runtime validation and broader graphical app trials remain pending.
 
 ## 6. Beta validation — clean extraction checked
 

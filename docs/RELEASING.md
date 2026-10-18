@@ -109,9 +109,10 @@ it does not validate Linux `ss`, Clash, public APIs, or physical sleep/wake.
 
 Runner labels follow the
 [GitHub-hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Both hosted architecture jobs remain unverified until their actual GitHub
-Actions runs complete. A local fixture pass or the YAML being present does not
-establish hosted-runner support.
+The first public source commit passed both hosted architecture jobs on macOS
+15.7.9; see [the recorded run and scope](VALIDATION.md#hosted-github-actions-validation--2026-10-18).
+Check the workflow result for the exact commit being distributed. Hosted checks
+do not include graphical app use, a clean-Mac installation, or notarization.
 
 Before a public release:
 

@@ -20,7 +20,7 @@ Developer ID signing and notarization have not been completed.
 | Isolated real SSH integration | 18 / 18 passed | Two disposable macOS SSH servers, real forwarding, strict trust checks, reconnect, injected diagnostic failures, and cleanup |
 | Failed integration-run cleanup | Passed | Deliberately failed runner exits nonzero; fixture listeners, SSH clients, and temporary keys are removed |
 | Linux SSH server integration | Pending | Requires a disposable Linux server trial |
-| Intel / x86_64 runtime | Pending | CI configuration is not a recorded successful run |
+| Intel graphical app runtime | Pending | Headless core/SSH checks and native packaging pass in hosted CI below; Intel GUI use has not been tested |
 | Minimum macOS 13 runtime | Pending | The declared deployment target is 13.0; this is not a macOS 13 trial |
 | New macOS account and downloaded-app Gatekeeper flow | Pending | Temporary extraction does not reproduce a fresh account or download quarantine |
 | Physical sleep/wake and network switching | Pending | No disruptive host power or network changes were performed |
@@ -47,6 +47,26 @@ bash scripts/verify-release.sh \
 The source checkout does not contain these generated artifacts. From a fresh
 checkout, set `CATUNNEL_RELEASE_DIR="$PWD/verification/release-checkpoint"` when
 running `bash scripts/package-release.sh` to reproduce the archive location.
+
+## Hosted GitHub Actions validation — 2026-10-18
+
+The first public source commit, `f0215fc`, passed
+[both jobs in GitHub Actions](https://github.com/YusenHou519/CATunnel/actions/runs/39124655875).
+The downloaded SSH reports record macOS **15.7.9** on both hosted architectures.
+
+| Architecture | Core checks | Archive rejection checks | Real SSH fixture | Native preview and extraction |
+| --- | --- | --- | --- | --- |
+| Apple Silicon / arm64 | 39 / 39 | 11 / 11 | 18 / 18 | Passed |
+| Intel / x86_64 | 39 / 39 | 11 / 11 | 18 / 18 | Passed |
+
+Each job uploads its SSH report and an ad-hoc-signed native preview with release
+metadata and the archive verification report. Both SSH reports confirm temporary
+fixture removal. These jobs run no graphical UI checks, no public diagnostic
+requests, and no Linux server tests. They do not establish macOS 13 compatibility,
+Gatekeeper acceptance, notarization, or everyday GUI use on Intel.
+
+See the [workflow](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
+for the result on newer commits; this table records the linked run specifically.
 
 ## Offline core and UI checks
 

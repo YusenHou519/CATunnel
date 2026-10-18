@@ -1,5 +1,7 @@
 # CATunnel — Coding Agent Tunnel
 
+[![Validate and package preview](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
+
 [简体中文](README.zh-CN.md)
 
 A lightweight native macOS menu-bar app that lets remote tools use a local
@@ -46,7 +48,14 @@ supported. The app deliberately ignores `~/.ssh/config` for its owned connection
 
 ## Build and check
 
-From the repository root:
+Clone the public source repository:
+
+```bash
+git clone https://github.com/YusenHou519/CATunnel.git
+cd CATunnel
+```
+
+Then, from the repository root:
 
 ```bash
 bash scripts/check.sh

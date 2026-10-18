@@ -1,5 +1,7 @@
 # CATunnel — Coding Agent Tunnel
 
+[![构建与预览验证](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
+
 [English](README.md)
 
 轻量级原生 macOS 菜单栏应用，让远端工具通过 SSH 反向隧道使用 Mac 上的本地 HTTP 代理。
@@ -37,7 +39,14 @@
 
 ## 构建与离线检查
 
-在仓库根目录执行：
+克隆公开源码仓库：
+
+```bash
+git clone https://github.com/YusenHou519/CATunnel.git
+cd CATunnel
+```
+
+然后在仓库根目录执行：
 
 ```bash
 bash scripts/check.sh
