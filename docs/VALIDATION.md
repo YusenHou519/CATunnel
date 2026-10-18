@@ -4,11 +4,15 @@ CATunnel separates offline behavior checks, artifact inspection, isolated SSH
 integration, and manual release trials. A passing result at one layer does not
 establish the others.
 
-## Unreleased startup-settings validation — 2026-10-19
+## Startup-settings validation — 2026-10-19
 
-The source adds native login-item management and per-server startup preferences.
-These changes are not included in `v0.6.0-preview.1`. A separate Apple Silicon
-app bundle was built without replacing the installed copy.
+Native login-item management and per-server startup preferences are included in
+`v0.6.0-preview.2` (build 5). The following offline results were recorded earlier
+against a separate Apple Silicon build 4 bundle containing those source changes,
+without replacing the installed copy during validation. They are not a test of
+the exact build 5 release archives; see the
+[preview.2 release notes](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.2)
+for evidence tied to those artifacts.
 
 - Offline core checks: **40 / 40**, including old-profile compatibility and the
   independence of startup connection preferences from automatic reconnection.
@@ -18,7 +22,7 @@ app bundle was built without replacing the installed copy.
 - Login-item checks use injected backends and temporary home directories. They
   never register/unregister a real login item or unload a live LaunchAgent.
 - The running app, its tunnels, installed bundle, and existing proxy/login
-  configuration are preserved during this validation.
+  configuration were preserved during this validation.
 
 Evidence is generated locally under `verification/startup-settings/` and is not
 committed. Run the independent build and offline check with:
@@ -32,6 +36,13 @@ CATUNNEL_OUTPUT_DIR="$PWD/verification/startup-settings/build" bash scripts/buil
 Actual ServiceManagement registration/approval and a subsequent macOS login
 with selected servers are still manual acceptance checks. Passing the fixtures
 does not establish those system interactions on every supported macOS version.
+
+The startup-settings source commit, `81ed4bc`, also passed
+[both hosted architecture jobs](https://github.com/YusenHou519/CATunnel/actions/runs/39147684302)
+on Apple Silicon and Intel, including core checks, isolated SSH checks, native
+packaging, and archive verification. This run predates the build 5 version bump;
+it does not establish graphical Intel use, real login-item registration, or
+clean-Mac installation of the new release archives.
 
 ## Recorded preview validation — 2026-10-18
 

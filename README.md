@@ -12,7 +12,7 @@
 
 ## 当前阶段
 
-这是 0.6.0（build 4）的独立源码预览版。本地预览包使用 ad-hoc 签名，
+这是 0.6.0（build 5，`v0.6.0-preview.2`）的独立预览版。预览包使用 ad-hoc 签名，
 尚未制作经过 Developer ID 签名及 Apple 公证的公开发行版。
 正常首次启动为空列表，可新增、编辑、删除任意数量的服务器。
 只有离线演示预置 A、B 两个示例；`.example` 主机仅作占位，填写真实主机前无法建立真实连接。
@@ -23,7 +23,7 @@
 
 ## 预览版下载
 
-在 [GitHub 预发布页面](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.1)
+在 [GitHub 预发布页面](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.2)
 下载与你的 Mac 匹配的 ZIP：Apple Silicon 选择 `arm64`，Intel 选择 `x86_64`。
 
 预览包使用 ad-hoc 签名，尚未经过 Developer ID 签名或 Apple 公证，macOS 可能阻止直接打开。
@@ -144,7 +144,7 @@ bash scripts/package-release.sh
 关闭面板不会停止隧道；退出应用会停止它自己创建的连接。支持临时网络错误后的自动重连，
 可在面板设置中调整宽度与字号。
 
-### 登录启动与自动连接（源码开发版）
+### 登录启动与自动连接
 
 面板齿轮打开“设置”，可分别调整：
 
@@ -158,7 +158,7 @@ bash scripts/package-release.sh
 此前由 CATunnel 手工配置的登录启动项会被只读识别；只有主动切换开关时才会备份并处理已识别的旧项，
 无法识别的内容会保留并显示错误。仅打开设置不会迁移登录项。
 离线演示的所有开关只改示例状态，不注册登录项、不保存日常配置、不连接服务器。
-这些新增开关尚未包含在 `v0.6.0-preview.1` 下载包中。
+这些开关从 `v0.6.0-preview.2`（build 5）起包含在下载包中。
 
 ## 首次使用引导与 SSH 准备
 

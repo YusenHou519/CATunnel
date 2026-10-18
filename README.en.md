@@ -13,7 +13,7 @@ Remote tool → server loopback proxy port → SSH tunnel → Mac local proxy �
 
 ## Development status
 
-This is the standalone source preview of CATunnel 0.6.0 (build 4).
+This is the standalone preview of CATunnel 0.6.0 (build 5, `v0.6.0-preview.2`).
 Local preview archives use an ad-hoc signature. They are not Developer ID signed
 or notarized public releases.
 
@@ -30,7 +30,7 @@ itself. A compatible local proxy must already be available.
 ## Preview downloads
 
 Download the ZIP matching your Mac from the
-[GitHub prerelease](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.1):
+[GitHub prerelease](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.2):
 choose `arm64` for Apple Silicon or `x86_64` for Intel.
 Extract the ZIP, move `CATunnel.app` to Applications if desired, and open it from the menu bar.
 
@@ -148,7 +148,7 @@ supports adjustable width and font size. Closing the panel keeps owned tunnels
 running; quitting the app stops them. Automatic reconnection is available for
 transient errors.
 
-### Login and connection startup (unreleased source)
+### Login and connection startup
 
 The panel's Settings page separates **Launch at login** from each server's
 **Connect when CATunnel starts** preference. Both connection preferences and login
@@ -164,7 +164,7 @@ A recognized older CATunnel LaunchAgent is read without migration on startup;
 only an explicit switch change backs up and handles that item. Unrecognized
 contents are preserved and reported. Offline mode simulates every switch without
 registering login items or changing the normal configuration. These switches are
-not part of the published `v0.6.0-preview.1` archive.
+included in preview archives starting with `v0.6.0-preview.2` (build 5).
 
 ## First-use guide and SSH setup
 

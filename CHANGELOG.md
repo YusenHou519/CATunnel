@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0-preview.2 (build 5) — 2026-10-19
 
 - Settings now separates Mac login startup from each server's startup connection
   preference. Older profiles default to manual connection, and changing startup

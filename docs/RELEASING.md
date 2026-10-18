@@ -18,9 +18,9 @@ the native architecture, verifies the signature, and creates an isolated
 directory under `verification/release/`. For example:
 
 ```text
-CATunnel-0.6.0-build4-macos-arm64-preview/
+CATunnel-0.6.0-build5-macos-arm64-preview/
   CATunnel.app/
-  CATunnel-0.6.0-build4-macos-arm64-preview.zip
+  CATunnel-0.6.0-build5-macos-arm64-preview.zip
   RELEASE.json
 ```
 
@@ -131,5 +131,6 @@ Before a public release:
 
 Do not advertise Intel, a minimum macOS runtime, universal binaries, Gatekeeper
 acceptance, or completed hosted CI solely because the source can target them.
-English UI localization, login startup, auto-updates, and Homebrew distribution
-remain follow-up work.
+English UI localization, auto-updates, and Homebrew distribution remain follow-up
+work. Login startup is included in `v0.6.0-preview.2`; actual system registration
+and a subsequent logout/login remain manual acceptance checks.
