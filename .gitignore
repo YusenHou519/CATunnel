@@ -1,0 +1,30 @@
+# Local build and package-manager output
+.build/
+.swiftpm/
+dist/
+__pycache__/
+*.py[cod]
+
+# Local verification, backups, and machine-specific settings
+verification/
+preflight/
+.diagnostics/
+*.log
+*.bak
+*.backup
+profiles.json
+ui-preferences.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.p8
+*.mobileprovision
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.xcuserstate
+xcuserdata/

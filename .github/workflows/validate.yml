@@ -1,0 +1,65 @@
+name: Validate and package preview
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS / ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline core checks
+        run: bash scripts/check.sh
+      - name: Release verifier rejection checks
+        run: bash scripts/check-release-verifier.sh
+      - name: Isolated real SSH checks
+        run: bash scripts/check-integration.sh --output "$PWD/verification/integration/report.json"
+      - name: Upload isolated SSH evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CATunnel-macos-${{ matrix.arch }}-ssh-report
+          path: verification/integration/report.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build and package native preview
+        env:
+          CATUNNEL_EXPECT_ARCH: ${{ matrix.arch }}
+        run: bash scripts/package-release.sh
+      - name: Verify clean extraction without launching the app
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=(verification/release/*/*.zip)
+          test "${#archives[@]}" -eq 1
+          bash scripts/verify-release.sh "${archives[0]}" "$PWD/verification/release-check"
+      - name: Upload preview and verification metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: CATunnel-macos-${{ matrix.arch }}-preview
+          path: |
+            verification/release/**/*.zip
+            verification/release/**/RELEASE.json
+            verification/release-check/**
+          if-no-files-found: error
+          retention-days: 14
