@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Settings now separates Mac login startup from each server's startup connection
+  preference. Older profiles default to manual connection, and changing startup
+  preferences does not restart active tunnels.
+- Login-item management reports macOS approval and errors, recognizes the previous
+  CATunnel LaunchAgent, and changes it only after an explicit switch action.
+- Offline checks cover startup selection, persistence, login-item failures and
+  settings layout without touching real login items or connections.
+
 ## 0.6.0 preview (build 4)
 
 First standalone source preview. The application interface is currently Chinese.

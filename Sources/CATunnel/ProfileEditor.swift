@@ -56,6 +56,7 @@ struct ProfileEditor: View {
     @State private var remotePort: String
     @State private var localPort: String
     @State private var autoReconnect: Bool
+    @State private var autoConnectOnLaunch: Bool
     @State private var identityFile: String?
     @State private var assessIPRisk: Bool
     @State private var errorMessage: String?
@@ -76,6 +77,7 @@ struct ProfileEditor: View {
         _remotePort = State(initialValue: String(profile.remotePort))
         _localPort = State(initialValue: String(profile.localPort))
         _autoReconnect = State(initialValue: profile.autoReconnect)
+        _autoConnectOnLaunch = State(initialValue: profile.autoConnectOnLaunch)
         _identityFile = State(initialValue: profile.identityFile)
         _assessIPRisk = State(initialValue: profile.assessIPRisk)
         _setup = StateObject(wrappedValue: setupModel ?? SetupCheckModel())
@@ -94,7 +96,7 @@ struct ProfileEditor: View {
 
     private var inputs: [String] {
         [name, host, user, sshPort, remotePort, localPort, identityFile ?? "",
-         String(autoReconnect), String(assessIPRisk)]
+         String(autoReconnect), String(autoConnectOnLaunch), String(assessIPRisk)]
     }
 
     var body: some View {
@@ -103,7 +105,7 @@ struct ProfileEditor: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(isNew ? "添加服务器" : "编辑服务器")
                         .font(.system(size: 21, weight: .semibold))
-                    Text(isNew ? "保存到 CATunnel；添加后由你手动连接。" : "更新 CATunnel 的本机连接设置。")
+                    Text(isNew ? "保存到 CATunnel；添加后不会立即连接。" : "更新 CATunnel 的本机连接设置。")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -268,9 +270,25 @@ struct ProfileEditor: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Toggle("意外断开后自动重连", isOn: $autoReconnect)
-                .font(.system(size: 12))
-                .accessibilityIdentifier("profile-auto-reconnect")
+            VStack(alignment: .leading, spacing: 5) {
+                Toggle("启动后自动连接", isOn: $autoConnectOnLaunch)
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("profile-auto-connect")
+                    .captureLayoutEvidence("profile-auto-connect")
+                Text("下次启动 CATunnel 时连接，保存后不会立即连接。也可在面板设置中调整。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Toggle("意外断开后自动重连", isOn: $autoReconnect)
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("profile-auto-reconnect")
+                Text("恢复已开启的隧道；手动断开后不会重连。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             VStack(alignment: .leading, spacing: 5) {
                 Toggle("启用 Net.Coffee 出口 IP 评分", isOn: $assessIPRisk)
                     .font(.system(size: 12))
@@ -375,7 +393,8 @@ struct ProfileEditor: View {
         }
         let edited = ServerProfile(id: profile.id, name: trim(name), host: trim(host), user: trim(user),
                                    sshPort: sshPortValue, remotePort: remotePortValue, localPort: localPortValue,
-                                   autoReconnect: autoReconnect, identityFile: identityFile, assessIPRisk: assessIPRisk)
+                                   autoReconnect: autoReconnect, identityFile: identityFile, assessIPRisk: assessIPRisk,
+                                   autoConnectOnLaunch: autoConnectOnLaunch)
         try edited.validate()
         return edited
     }

@@ -11,19 +11,23 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var autoReconnect: Bool
     public var identityFile: String?
     public var assessIPRisk: Bool
+    public var autoConnectOnLaunch: Bool
 
     public init(id: String, name: String, host: String, user: String, sshPort: Int,
                 remotePort: Int, localPort: Int, autoReconnect: Bool,
-                identityFile: String? = nil, assessIPRisk: Bool = false) {
+                identityFile: String? = nil, assessIPRisk: Bool = false,
+                autoConnectOnLaunch: Bool = false) {
         self.id = id; self.name = name; self.host = host; self.user = user
         self.sshPort = sshPort; self.remotePort = remotePort; self.localPort = localPort
         self.autoReconnect = autoReconnect
         self.identityFile = identityFile
         self.assessIPRisk = assessIPRisk
+        self.autoConnectOnLaunch = autoConnectOnLaunch
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, host, user, sshPort, remotePort, localPort, autoReconnect, identityFile, assessIPRisk
+        case autoConnectOnLaunch
     }
 
     public init(from decoder: Decoder) throws {
@@ -38,6 +42,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         autoReconnect = try values.decode(Bool.self, forKey: .autoReconnect)
         identityFile = try values.decodeIfPresent(String.self, forKey: .identityFile)
         assessIPRisk = try values.decodeIfPresent(Bool.self, forKey: .assessIPRisk) ?? false
+        autoConnectOnLaunch = try values.decodeIfPresent(Bool.self, forKey: .autoConnectOnLaunch) ?? false
     }
 
     public var expandedIdentityFile: String? {

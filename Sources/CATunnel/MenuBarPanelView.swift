@@ -32,29 +32,29 @@ struct MenuBarPanelView: View {
                 AppearanceSettingsView(store: store)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                Divider()
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let message = store.configurationError {
-                        ProfileConfigurationErrorView(message: message)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let message = store.configurationError {
+                            ProfileConfigurationErrorView(message: message)
+                        }
+                        if let operationError {
+                            Label(operationError, systemImage: "exclamationmark.circle")
+                                .font(panelFont(size: 11))
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("panel-profile-error")
+                        }
+                        if let profile = store.selectedProfile {
+                            serverPage(profile)
+                        } else {
+                            ServerListEmptyState(compact: true, canAdd: store.configurationError == nil,
+                                                 identifierPrefix: "panel", onAdd: addServer,
+                                                 onGuide: { GettingStartedWindow.shared.show(store: store) })
+                        }
                     }
-                    if let operationError {
-                        Label(operationError, systemImage: "exclamationmark.circle")
-                            .font(panelFont(size: 11))
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("panel-profile-error")
-                    }
-                    if let profile = store.selectedProfile {
-                        serverPage(profile)
-                    } else {
-                        ServerListEmptyState(compact: true, canAdd: store.configurationError == nil,
-                                             identifierPrefix: "panel", onAdd: addServer,
-                                             onGuide: { GettingStartedWindow.shared.show(store: store) })
-                    }
+                    .padding(18)
                 }
-                .padding(18)
             }
             Divider()
             footer
@@ -114,6 +114,7 @@ struct MenuBarPanelView: View {
         let selected = store.selectedID == profile.id
         return Button {
             store.selectedID = profile.id
+            store.showingAppearanceSettings = false
         } label: {
             VStack(spacing: 1) {
                 Image(systemName: index == 0 ? "server.rack" : "externaldrive.connected.to.line.below")
@@ -480,14 +481,14 @@ struct MenuBarPanelView: View {
                 Image(systemName: "gearshape")
                     .foregroundStyle(store.showingAppearanceSettings ? Color.accentColor : Color.primary)
             }
-            .help("外观设置：面板宽度与字体大小")
-            .accessibilityLabel("外观设置")
+            .help("设置：登录启动、服务器自动连接与外观")
+            .accessibilityLabel("设置")
             .accessibilityValue(store.showingAppearanceSettings ? "已展开" : "已收起")
             .accessibilityIdentifier("panel-appearance-settings")
             Menu {
                 Button("使用引导…") { GettingStartedWindow.shared.show(store: store) }
                     .accessibilityIdentifier("panel-getting-started")
-                Button("外观设置…") { store.showingAppearanceSettings = true }
+                Button("设置…") { store.showingAppearanceSettings = true }
                 Button("添加服务器…", action: addServer)
                     .disabled(store.configurationError != nil)
                 Button("连接设置与日志…", action: showDetails)

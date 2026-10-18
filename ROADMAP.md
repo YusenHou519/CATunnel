@@ -49,5 +49,13 @@
   network-change and sleep/wake checks, and feedback from other users.
 - Leave proxy migration to an explicit, separate decision by the user.
 
-Later candidates: SSH aliases/jump hosts, login startup, automatic updates,
+## 7. Startup preferences — implemented in unreleased source
+
+- Separate app login startup and per-server automatic connection preferences.
+- Existing profiles stay manual by default; changing a startup preference leaves
+  active tunnels intact. Offline mode simulates these switches without system changes.
+- Real macOS login registration and a subsequent logout/login remain manual
+  acceptance checks; fixture tests do not substitute for that trial.
+
+Later candidates: SSH aliases/jump hosts, automatic updates,
 and a Homebrew installation path.

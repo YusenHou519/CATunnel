@@ -41,6 +41,7 @@ final class TunnelStore: ObservableObject {
     }
 
     let controller: TunnelController?
+    let loginItem: LoginItemManager
     let demoMode: Bool
     private let persistSettings: Bool
     private let settingsURL: URL
@@ -77,10 +78,12 @@ final class TunnelStore: ObservableObject {
     var selectedProfile: ServerProfile? { profiles.first { $0.id == selectedID } }
 
     init(persistSettings: Bool = true, controller: TunnelController? = nil,
-         demoMode: Bool = false, settingsDirectory: URL? = nil) {
+         demoMode: Bool = false, settingsDirectory: URL? = nil,
+         loginItem: LoginItemManager? = nil) {
         self.persistSettings = persistSettings && !demoMode
         self.controller = demoMode ? nil : (controller ?? TunnelController())
         self.demoMode = demoMode
+        self.loginItem = loginItem ?? LoginItemManager(offline: demoMode || !persistSettings || settingsDirectory != nil)
         let directory = settingsDirectory ?? AppIdentity.settingsDirectory()
         settingsURL = directory.appendingPathComponent("profiles.json")
         preferencesURL = directory.appendingPathComponent("ui-preferences.json")
@@ -203,6 +206,17 @@ final class TunnelStore: ObservableObject {
         completedChecks.removeValue(forKey: profile.id)
         statuses[profile.id] = .stopped
         appendLog(profile.id, demoMode ? "演示：设置仅更新在内存中，没有写入配置文件。" : "连接设置已保存；下次开启隧道时生效。")
+    }
+
+    func setAutoConnectOnLaunch(_ enabled: Bool, for id: String) throws {
+        try ensureConfigurationAvailable()
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { throw StoreError.unknownServer }
+        guard profiles[index].autoConnectOnLaunch != enabled else { return }
+        var updated = profiles
+        updated[index].autoConnectOnLaunch = enabled
+        try persistProfiles(updated)
+        // Launch preference changes must not replace or stop an active controller session.
+        profiles = updated
     }
 
     func remove(_ id: String) throws {

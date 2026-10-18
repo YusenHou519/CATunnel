@@ -49,6 +49,7 @@ enum ProfileStoreChecks {
             && !FileManager.default.fileExists(atPath: independentDirectory.path)
         checks["unknownProfileEditsAreRejected"] = rejects { try independent.save(profile(99)) }
             && rejects { try independent.remove("missing-server") }
+            && rejects { try independent.setAutoConnectOnLaunch(true, for: "missing-server") }
             && independent.profiles.isEmpty && !FileManager.default.fileExists(atPath: independentDirectory.path)
 
         try independent.add(profile(1))
@@ -84,6 +85,23 @@ enum ProfileStoreChecks {
         checks["configurationReloadsWithoutTouchingOtherApplications"] = reloaded.profiles == independent.profiles
             && reloaded.selectedID == independent.selectedID && unrelatedReadBack == unrelatedData
             && independentDirectory.lastPathComponent == "CATunnel"
+        let startupDirectory = temporaryDirectory.appendingPathComponent("startup-preferences")
+        _ = try writeProfiles([profile(1), profile(2)], to: startupDirectory)
+        let startup = makeStore(startupDirectory)
+        let stoppedStates = startup.statuses
+        try startup.setAutoConnectOnLaunch(true, for: profile(1).id)
+        let startupReloaded = makeStore(startupDirectory)
+        checks["startupChoicePersistsPerServerWithoutConnecting"] = startupReloaded.profiles[0].autoConnectOnLaunch
+            && !startupReloaded.profiles[1].autoConnectOnLaunch
+            && startup.statuses == stoppedStates && startupReloaded.statuses == stoppedStates
+        let activeStatus = TunnelStatus(phase: .connected, message: "Fixture connection", connectedAt: Date())
+        startup.controller?.onEvent?(.status(id: profile(1).id, status: activeStatus))
+        let startupLogIDs = startup.logs.mapValues { $0.map(\.id) }
+        try startup.setAutoConnectOnLaunch(false, for: profile(1).id)
+        checks["startupChoiceCanChangeWhileConnectedWithoutStopping"] = !startup.profiles[0].autoConnectOnLaunch
+            && startup.status(for: profile(1).id) == activeStatus
+            && startup.logs.mapValues { $0.map(\.id) } == startupLogIDs
+            && startup.profiles[0].autoReconnect
         checks["SSHIdentityAndRiskConsentPersistPerProfile"] = reloaded.profiles[4].identityFile == edited.identityFile
             && reloaded.profiles[4].assessIPRisk && reloaded.profiles[0].identityFile == nil
             && !reloaded.profiles[0].assessIPRisk
@@ -217,6 +235,7 @@ enum ProfileStoreChecks {
         let failures = failsWriting { try failing.add(profile(10)) }
             && failsWriting { try failing.save(failedEdit) }
             && failsWriting { try failing.remove(profile(2).id) }
+            && failsWriting { try failing.setAutoConnectOnLaunch(true, for: profile(1).id) }
         let blockerAfter = try Data(contentsOf: failingDirectory)
         let originalAfter = try Data(contentsOf: displacedDirectory.appendingPathComponent("profiles.json"))
         checks["failedWritesPreserveAllInMemoryState"] = failures && failing.profiles == beforeFailureProfiles
@@ -237,6 +256,13 @@ enum ProfileStoreChecks {
         checks["connectedProfileCannotBeEditedOrDeleted"] = !demo.canModify(active.id)
             && rejects { try demo.save(active) } && rejects { try demo.remove(active.id) }
             && demo.profiles == demoProfiles && demo.status(for: active.id).phase == .connected
+        let activeBeforeStartupChange = demo.status(for: active.id)
+        let historyBeforeStartupChange = demo.lastCompletedCheckAt(for: active.id)
+        try demo.setAutoConnectOnLaunch(true, for: active.id)
+        checks["demoStartupChoicePreservesConnectionAndHistoryWithoutWriting"] = demo.profiles[0].autoConnectOnLaunch
+            && demo.status(for: active.id) == activeBeforeStartupChange
+            && demo.lastCompletedCheckAt(for: active.id) == historyBeforeStartupChange
+            && demo.controller == nil && !FileManager.default.fileExists(atPath: isolatedDirectory.path)
         demo.start(stopped.id)
         checks["connectingProfileCannotBeEditedOrDeleted"] = demo.status(for: stopped.id).phase == .connecting
             && !demo.canModify(stopped.id) && rejects { try demo.save(stopped) } && rejects { try demo.remove(stopped.id) }

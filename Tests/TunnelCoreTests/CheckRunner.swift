@@ -24,6 +24,7 @@ struct CheckRunner {
         let checks: [(String, () async throws -> Void)] = [
             ("portable example profiles and blank drafts", examples),
             ("server configuration round trip and versioning", configuration),
+            ("startup connection preferences and legacy compatibility", startupPreferences),
             ("duplicate server identity and listener rejection", duplicateConfiguration),
             ("example profiles fail before connection startup", exampleStart),
             ("input validation and injection rejection", validation),
@@ -120,6 +121,49 @@ struct CheckRunner {
         invalidProfile.host = "-oProxyCommand=fixture"
         try expectThrows("Configuration accepted an unsafe profile") {
             try ServerConfiguration(profiles: [invalidProfile]).validate()
+        }
+    }
+
+    static func startupPreferences() throws {
+        try expect(!ServerProfile.draft().autoConnectOnLaunch &&
+                   ServerProfile.examples.allSatisfy { !$0.autoConnectOnLaunch },
+                   "New and example profiles must require opt-in before connecting at launch")
+        let historicalProfile = """
+        {"id":"legacy","name":"Legacy","host":"server.example","user":"user",
+         "sshPort":22,"remotePort":17892,"localPort":7890,"autoReconnect":true}
+        """
+        let decodedProfile = try JSONDecoder().decode(ServerProfile.self, from: Data(historicalProfile.utf8))
+        try expect(!decodedProfile.autoConnectOnLaunch && decodedProfile.autoReconnect,
+                   "Loading a historical profile must not turn reconnection into startup opt-in")
+        for historicalConfiguration in ["[\(historicalProfile)]",
+                                        "{\"version\":1,\"profiles\":[\(historicalProfile)]}"] {
+            let decoded = try ServerConfiguration.decode(Data(historicalConfiguration.utf8))
+            try expect(decoded.profiles == [decodedProfile],
+                       "Historical array or versioned configuration changed during loading")
+            let saved = try decoded.encoded()
+            let reloaded = try ServerConfiguration.decode(saved)
+            try expect(reloaded.profiles == [decodedProfile],
+                       "Saving a historical configuration changed its startup preference")
+        }
+
+        for autoConnect in [false, true] {
+            for autoReconnect in [false, true] {
+                let profile = ServerProfile(id: "startup", name: "Startup", host: "server.example", user: "user",
+                                            sshPort: 22, remotePort: 17892, localPort: 7890,
+                                            autoReconnect: autoReconnect, autoConnectOnLaunch: autoConnect)
+                let encoded = try JSONEncoder().encode(profile)
+                let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+                try expect(object?["autoConnectOnLaunch"] as? Bool == autoConnect,
+                           "Startup preference was not explicitly persisted")
+                let decoded = try JSONDecoder().decode(ServerProfile.self, from: encoded)
+                try expect(decoded == profile && decoded.autoReconnect == autoReconnect &&
+                           decoded.autoConnectOnLaunch == autoConnect,
+                           "Startup opt-in and connection retry preferences must remain independent")
+            }
+        }
+        let invalidType = historicalProfile.dropLast() + ",\"autoConnectOnLaunch\":\"true\"}"
+        try expectThrows("Non-boolean startup preference was silently accepted") {
+            _ = try JSONDecoder().decode(ServerProfile.self, from: Data(invalidType.utf8))
         }
     }
 

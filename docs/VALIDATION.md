@@ -4,6 +4,35 @@ CATunnel separates offline behavior checks, artifact inspection, isolated SSH
 integration, and manual release trials. A passing result at one layer does not
 establish the others.
 
+## Unreleased startup-settings validation — 2026-10-19
+
+The source adds native login-item management and per-server startup preferences.
+These changes are not included in `v0.6.0-preview.1`. A separate Apple Silicon
+app bundle was built without replacing the installed copy.
+
+- Offline core checks: **40 / 40**, including old-profile compatibility and the
+  independence of startup connection preferences from automatic reconnection.
+- Offline app checks: **119 / 119**, including startup selection, persistence and
+  write failure, connected-session preservation, login-item registration errors,
+  approval states, legacy-item preservation/backups, and narrow/large-font layouts.
+- Login-item checks use injected backends and temporary home directories. They
+  never register/unregister a real login item or unload a live LaunchAgent.
+- The running app, its tunnels, installed bundle, and existing proxy/login
+  configuration are preserved during this validation.
+
+Evidence is generated locally under `verification/startup-settings/` and is not
+committed. Run the independent build and offline check with:
+
+```bash
+CATUNNEL_OUTPUT_DIR="$PWD/verification/startup-settings/build" bash scripts/build-app.sh
+./verification/startup-settings/build/CATunnel.app/Contents/MacOS/CATunnel \
+  --ui-check "$PWD/verification/startup-settings/ui/report.json"
+```
+
+Actual ServiceManagement registration/approval and a subsequent macOS login
+with selected servers are still manual acceptance checks. Passing the fixtures
+does not establish those system interactions on every supported macOS version.
+
 ## Recorded preview validation — 2026-10-18
 
 The following results apply to **CATunnel 0.6.0, build 4**, built and run on

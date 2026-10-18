@@ -146,7 +146,25 @@ Each profile has independent connection state, logs, and checks. The top tabs
 scroll horizontally when there are many servers. The panel
 supports adjustable width and font size. Closing the panel keeps owned tunnels
 running; quitting the app stops them. Automatic reconnection is available for
-transient errors. Login startup is not configured.
+transient errors.
+
+### Login and connection startup (unreleased source)
+
+The panel's Settings page separates **Launch at login** from each server's
+**Connect when CATunnel starts** preference. Both connection preferences and login
+registration are opt-in; older profiles default to no automatic connection.
+Changing a startup preference leaves active connections and their results intact.
+The server editor also exposes the connection preference. Automatic reconnection
+only restores an already requested connection; manually stopped servers stay stopped.
+
+Login startup uses macOS login-item services. If approval is required, Settings
+shows the pending state and links to the system login-item settings. Keep the app
+in a stable location, normally Applications, before enabling this option.
+A recognized older CATunnel LaunchAgent is read without migration on startup;
+only an explicit switch change backs up and handles that item. Unrecognized
+contents are preserved and reported. Offline mode simulates every switch without
+registering login items or changing the normal configuration. These switches are
+not part of the published `v0.6.0-preview.1` archive.
 
 ## First-use guide and SSH setup
 

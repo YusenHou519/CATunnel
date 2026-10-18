@@ -66,6 +66,13 @@ struct LaunchOptions {
         }
         return nil
     }
+
+    func startupConnectionIDs(profiles: [ServerProfile]) -> [String] {
+        guard !isOffline else { return [] }
+        var seen = Set<String>()
+        return (profiles.filter(\.autoConnectOnLaunch).map(\.id) + connectOnce)
+            .filter { seen.insert($0).inserted }
+    }
 }
 
 @main
@@ -154,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 showPopover()
             }
         } else {
-            for id in Set(options.connectOnce) { store.start(id) }
+            for id in options.startupConnectionIDs(profiles: store.profiles) { store.start(id) }
         }
     }
 
@@ -201,7 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        let settings = appMenu.addItem(withTitle: "外观设置…", action: #selector(showAppearanceSettings(_:)), keyEquivalent: ",")
+        let settings = appMenu.addItem(withTitle: "设置…", action: #selector(showAppearanceSettings(_:)), keyEquivalent: ",")
         settings.target = self
         let details = appMenu.addItem(withTitle: "连接设置与日志…", action: #selector(showWindow(_:)), keyEquivalent: "")
         details.target = self
@@ -398,6 +405,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else { checks["configurationErrorDoesNotHideEditorActions"] = false }
         await blocked.shutdown()
 
+        let startupSettings = TunnelStore(persistSettings: false, demoMode: true)
+        let startupStates = startupSettings.statuses
+        try startupSettings.setAutoConnectOnLaunch(true, for: startupSettings.profiles[0].id)
+        await startupSettings.loginItem.setEnabled(true)
+        startupSettings.showingAppearanceSettings = true
+        for (label, width, scale) in [("narrow-large", 300.0, 1.2), ("wide-small", 440.0, 0.9)] {
+            startupSettings.updatePanelAppearance(width: width, fontScale: scale)
+            let toggleIDs = ["settings-login-toggle"] + startupSettings.profiles.map { "settings-auto-connect-\($0.id)" }
+            let frames = try await captureFixture(panel(startupSettings), size: NSSize(width: width, height: 640),
+                to: folder.appendingPathComponent("startup-settings-\(label).png"),
+                identifiers: toggleIDs + ["settings-scroll"])
+            if let content = frames["fixture-content"], let scroll = frames["settings-scroll"] {
+                checks["startupSwitchesFitSettingsPage-\(label)"] = toggleIDs.allSatisfy { id in
+                    guard let frame = frames[id] else { return false }
+                    return frame.width > 0 && frame.height > 0 && content.insetBy(dx: -1, dy: -1).contains(frame)
+                        && scroll.insetBy(dx: -1, dy: -1).contains(frame)
+                }
+            } else { checks["startupSwitchesFitSettingsPage-\(label)"] = false }
+        }
+        checks["offlineStartupSwitchesDoNotAlterConnections"] = startupSettings.statuses == startupStates
+            && startupSettings.loginItem.isEnabled && startupSettings.profiles[0].autoConnectOnLaunch
+            && !startupSettings.profiles[1].autoConnectOnLaunch && startupSettings.controller == nil
+        await startupSettings.shutdown()
+
         let multiple = TunnelStore(persistSettings: false, demoMode: true)
         for id in multiple.profiles.map(\.id) {
             multiple.stop(id)
@@ -531,6 +562,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 ["app", "--smoke-test", "/tmp/s.json"], ["app", "--test-port", "17893"]
             ].allSatisfy { LaunchOptions(arguments: $0).validationError != nil }
             let connectProfile = ProfileStoreChecks.profile(1)
+            var automatic = ProfileStoreChecks.profile(2)
+            automatic.autoConnectOnLaunch = true
+            checks["normalStartupSelectsOnlyOptedInServers"] = LaunchOptions(arguments: ["app"])
+                .startupConnectionIDs(profiles: [connectProfile, automatic]) == [automatic.id]
+                && LaunchOptions(arguments: ["app"]).startupConnectionIDs(profiles: [connectProfile]).isEmpty
+            checks["explicitStartupAndSavedChoiceAreDeduplicated"] = LaunchOptions(arguments: ["app", "--connect-once",
+                automatic.id, "--connect-once", connectProfile.id, "--connect-once", automatic.id])
+                .startupConnectionIDs(profiles: [connectProfile, automatic]) == [automatic.id, connectProfile.id]
+            checks["allOfflineModesIgnoreAutomaticConnections"] = [
+                ["app", "--demo"], ["app", "--preview", "/tmp/p.png"], ["app", "--ui-check", "/tmp/u.json"]
+            ].allSatisfy { LaunchOptions(arguments: $0).startupConnectionIDs(profiles: [automatic]).isEmpty }
             checks["connectOnceUsesSavedIDs"] = LaunchOptions(arguments: ["app", "--connect-once", connectProfile.id])
                 .connectionValidationError(profiles: [connectProfile]) == nil
                 && LaunchOptions(arguments: ["app", "--connect-once", "missing-server"])
@@ -586,6 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: temp) }
             checks.merge(try await ProfileStoreChecks.run(in: temp)) { _, result in result }
+            checks.merge(try await LoginItemChecks.run(in: temp.appendingPathComponent("login-items"))) { _, result in result }
 
             let lockURL = AppIdentity.lockURL(temporaryDirectory: temp)
             let unrelatedLock = try AppInstanceLock(url: temp.appendingPathComponent("unrelated-app.lock"))
