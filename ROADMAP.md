@@ -1,61 +1,66 @@
-# Roadmap
+# 开发计划 · Roadmap
 
-## 1. Standalone source foundation — implemented
+CATunnel 通过 GitHub 分发，不计划上架 App Store。以下是当前方向，
+不是发布日期承诺；功能建议和复现信息欢迎通过
+[Issues](https://github.com/YusenHou519/CATunnel/issues) 讨论。
 
-- Separate project, application identity, settings directory, and instance lock.
-- Neutral example profiles and offline fixtures.
-- Local build and check scripts, MIT license, and portable documentation.
-- No automatic import of settings or changes to remote application proxies.
+## 已完成
 
-## 2. General-purpose server profiles — implemented
+- [x] 原生 macOS 菜单栏面板、多服务器页签与连接状态。
+- [x] 空列表首次启动，任意服务器新增、编辑、删除。
+- [x] 首次使用引导、私钥路径选择与 SSH 连接准备检查。
+- [x] 独立隧道管理、意外断开后自动重连。
+- [x] 服务连通性检测，以及默认关闭的 Net.Coffee IP 风险参考。
+- [x] 面板宽度、字体大小、登录启动与每台服务器启动后自动连接设置。
+- [x] 离线检查、隔离 SSH 集成检查和双架构 GitHub CI。
+- [x] Apple Silicon / Intel GitHub 预览包与中英文文档。
 
-- Empty first-run state and arbitrary profile creation/deletion.
-- Editable display names, horizontally scrolling server tabs, and a multi-server overview.
-- Versioned configuration and clear invalid-file recovery.
-- Legacy-array compatibility, profile deletion confirmation, and preservation of other connections.
+## 优先开发 · Next
 
-## 3. First-use experience — setup flow implemented
+- [ ] **英文界面 / English UI**：翻译面板、设置、引导和错误提示，验证窄面板布局。
+- [ ] **SSH 别名 / SSH aliases**：先定义支持的配置字段与解析方式，再实现主机选择。
+  不能直接继承全部 `~/.ssh/config`；需防止意外执行 `ProxyCommand`、`LocalCommand`
+  或创建配置中已有的 `RemoteForward`、`LocalForward`、`DynamicForward`。
+- [ ] **跳板机 / Jump hosts**：设计显式 `ProxyJump` 配置，保留严格主机指纹校验，
+  明确每一跳的认证方式、进程归属和失败提示，并增加隔离集成检查。
 
-- First-use guide and explicit local proxy / SSH / remote dependency checks.
-- Identity-file selection and guidance for host fingerprints and encrypted keys.
-- Optional Net.Coffee assessment, off by default, and documented service limits.
-- Remaining follow-up: English UI localization (current interface is Chinese).
+## 后续候选 · To evaluate
 
-## 4. Repeatable validation — infrastructure implemented
+这些功能尚未实现；先评估实际需求和配置安全，再决定是否进入开发。
 
-- Offline core checks and archive-verifier rejection cases pass locally.
-- GitHub Actions passed core, SSH, archive, and native build checks on macOS
-  15.7.9 for arm64 and x86_64. The recorded run is linked in the validation notes.
-- A disposable local SSH integration harness uses temporary keys and isolated
-  trust files. See [VALIDATION.md](docs/VALIDATION.md) for its observed results.
-- Real Linux deployment and physical sleep/wake trials remain manual acceptance
-  work. Controlled service failures do not establish public API availability.
+- [ ] **配置导入与导出**：设计版本兼容、重复条目处理和脱敏规则；
+  不打包私钥、口令或凭据，导入不自动连接。
+- [ ] **Homebrew 安装**：评估维护项目 tap/cask 的成本和预览版升级方式。
+- [ ] **版本检查与更新**：评估手动检查、可选通知与自动更新的范围；
+  新增网络请求和下载验证方式需要明确说明，不默认开启后台检查。
+- [ ] **可选签名与公证**：用于改善 GitHub 下载后的安装体验；
+  不作为继续开发或发布预览包的前置条件，也不意味着上架 App Store。
 
-## 5. Distribution — preview packaging implemented
+## 待验证 · Acceptance backlog
 
-- Versioned native-architecture ZIP archives and release metadata, with no
-  checksum-file requirement.
-- Clean extraction, bundle signature, architecture, and deployment-target checks.
-- Optional Developer ID signing/notarization hooks; credentials and a real
-  notarized distribution are still pending.
-- Source is public on GitHub, with native arm64 and x86_64 CI preview artifacts.
-  Minimum-OS runtime validation and broader graphical app trials remain pending.
+以下是验证工作，不等同于未实现的功能。离线测试、CI 和个人机器上的成功结果，
+均不能代替其他系统、架构和下载环境的实测。详细证据与范围见
+[验证记录](docs/VALIDATION.md)。
 
-## 6. Beta validation — clean extraction checked
+- [ ] **干净安装**：在新的 Mac 或用户账户中，通过浏览器下载实际 Release，
+  验证解压、Gatekeeper 提示、首次打开与空配置引导。
+- [ ] **最低系统版本**：在 macOS 13 上运行实际包，而非仅检查构建目标。
+- [ ] **Intel 图形界面**：验证菜单栏、设置、服务器编辑与实际连接；
+  Intel CI 的无界面检查不替代此项。
+- [ ] **登录启动**：验证真实登录项注册、系统批准流程、注销后重新登录，
+  以及选择性自动连接；不只验证模拟后端。
+- [ ] **Linux 端部署**：在独立测试服务器上记录端口监听、认证失败、
+  端口占用、连接恢复与退出清理的结果。
+- [ ] **睡眠与网络切换**：在专用测试环境中验证唤醒、Wi-Fi 切换、
+  代理短暂不可用后的恢复，并确认手动断开的服务器不会被自动连接。
+- [ ] **外部用户试用**：收集不同系统、架构和 SSH 环境的复现信息，
+  将结果绑定到具体 Release，而非泛化为所有版本的保证。
 
-- The extracted Apple Silicon preview passes offline UI checks with fresh,
-  temporary settings. This is not a fresh macOS account or Gatekeeper trial.
-- Still needed: a separate test account/Mac, a disposable Linux server, manual
-  network-change and sleep/wake checks, and feedback from other users.
-- Leave proxy migration to an explicit, separate decision by the user.
+## 开发边界
 
-## 7. Startup preferences — included in v0.6.0-preview.2
+应用继续只管理自己创建的隧道，保留严格 SSH 主机指纹与 TLS 校验。
+不会自动修改 shell、编辑器或服务器工具的代理设置；第三方检测保持用户主动触发。
+代理迁移由使用者单独决定，不作为安装或升级的隐式步骤。
 
-- Separate app login startup and per-server automatic connection preferences.
-- Existing profiles stay manual by default; changing a startup preference leaves
-  active tunnels intact. Offline mode simulates these switches without system changes.
-- Real macOS login registration and a subsequent logout/login remain manual
-  acceptance checks; fixture tests do not substitute for that trial.
-
-Later candidates: SSH aliases/jump hosts, automatic updates,
-and a Homebrew installation path.
+开发与检查命令见 [贡献指南](CONTRIBUTING.md)，打包流程见
+[发布文档](docs/RELEASING.md)。

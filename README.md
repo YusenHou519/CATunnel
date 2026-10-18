@@ -1,241 +1,82 @@
-![CATunnel 封面：笔记本通过山中隧道连接远程服务器](docs/assets/catunnel-cover-v1.png)
+![CATunnel 封面](docs/assets/catunnel-cover-v1.png)
 
 # CATunnel — Coding Agent Tunnel
 
 [![构建与预览验证](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
 
-[English](README.en.md)
+[English](README.en.md) · [使用指南](docs/USAGE.md) · [Agent 指南](AGENTS.md)
 
-轻量级原生 macOS 菜单栏应用，让远端工具通过 SSH 反向隧道使用 Mac 上的本地 HTTP 代理。
+轻量级原生 macOS 菜单栏应用，让远端 Codex、Claude 等工具通过 SSH 隧道使用 Mac 上的本地代理。
 
-```text
-远端工具 → 服务器回环代理端口 → SSH 隧道 → Mac 本地代理 → 外网
-```
+`远端工具 → 服务器回环端口 → SSH 隧道 → Mac 本地代理 → 外网`
+
+## 功能
+
+- **多服务器管理**：新增、编辑、删除服务器，通过顶部页签切换。
+- **隧道控制**：独立连接状态、意外断开后自动重连、按服务器选择启动后自动连接。
+- **网络检测**：OpenAI API、Claude、Google 连通性；可选 Net.Coffee 出口 IP 评分。
+- **原生菜单栏体验**：登录时启动、面板宽度与字号调整、首次使用引导。
+
+CATunnel 需要已有的本地 HTTP/mixed 代理；开启隧道不会自动修改远端工具的代理配置。
 
 ## 界面预览
 
-以下为应用离线演示的实际界面，使用示例服务器 A / B；连接状态与检测结果均为模拟数据。
-点击图片可查看原图。
+实际界面的离线截图，服务器和检测结果均为示例。点击可看原图。
 
 | 菜单栏主面板 | 启动与外观设置 |
 | :---: | :---: |
-| <a href="docs/assets/screenshots/menu-panel.png"><img src="docs/assets/screenshots/menu-panel.png" width="320" alt="CATunnel 菜单栏主面板：服务器页签、隧道开关与服务连通性检测"></a> | <a href="docs/assets/screenshots/settings.png"><img src="docs/assets/screenshots/settings.png" width="320" alt="CATunnel 设置：登录启动、服务器自动连接、面板宽度与字体大小"></a> |
-| 切换服务器，查看隧道状态和服务连通性。 | 分别调整登录启动、自动连接、面板宽度与字号。 |
+| <a href="docs/assets/screenshots/menu-panel.png"><img src="docs/assets/screenshots/menu-panel.png" width="260" alt="CATunnel 主面板：服务器切换、隧道开关与网络检测"></a> | <a href="docs/assets/screenshots/settings.png"><img src="docs/assets/screenshots/settings.png" width="260" alt="CATunnel 设置：登录启动、自动连接、面板宽度与字号"></a> |
+
+<details>
+<summary>更多界面：服务器配置与首次使用引导</summary>
 
 | 服务器配置 | 首次使用引导 |
 | :---: | :---: |
-| <a href="docs/assets/screenshots/server-editor.png"><img src="docs/assets/screenshots/server-editor.png" width="380" alt="CATunnel 添加服务器窗口：SSH 地址、用户、密钥及代理端口配置"></a> | <a href="docs/assets/screenshots/getting-started.png"><img src="docs/assets/screenshots/getting-started.png" width="380" alt="CATunnel 使用引导：本地代理、SSH 登录与手动连接三个步骤"></a> |
-| 填写 SSH 地址、用户、密钥与两端代理端口。 | 按本地代理、SSH 登录、保存连接三个步骤完成准备。 |
+| <a href="docs/assets/screenshots/server-editor.png"><img src="docs/assets/screenshots/server-editor.png" width="380" alt="CATunnel 服务器配置：SSH 地址、用户、密钥与代理端口"></a> | <a href="docs/assets/screenshots/getting-started.png"><img src="docs/assets/screenshots/getting-started.png" width="380" alt="CATunnel 首次使用引导"></a> |
 
-## 当前阶段
+</details>
 
-这是 0.6.0（build 5，`v0.6.0-preview.2`）的独立预览版。预览包使用 ad-hoc 签名，
-尚未制作经过 Developer ID 签名及 Apple 公证的公开发行版。
-正常首次启动为空列表，可新增、编辑、删除任意数量的服务器。
-只有离线演示预置 A、B 两个示例；`.example` 主机仅作占位，填写真实主机前无法建立真实连接。
-界面目前为中文。
+## 安装与快速开始
 
-应用管理自己创建的 SSH 连接。需要用户已有本地代理；应用不会修改 SSH、shell、
-编辑器或远端工具的代理配置，也不会让已打开的远端终端自动切换代理。
+从 [GitHub Releases](https://github.com/YusenHou519/CATunnel/releases) 下载预览包：
+Apple Silicon 选择 **arm64**，Intel 选择 **x86_64**。解压后将 CATunnel.app 放入“应用程序”，打开菜单栏图标。
 
-## 预览版下载
+当前版本为 **0.6.0-preview.2（build 5）**，界面为中文。预览包尚未经过 Apple 公证；
+若 macOS 阻止打开，请参照[安装说明](docs/USAGE.md)，无需关闭系统安全保护。
 
-在 [GitHub 预发布页面](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.2)
-下载与你的 Mac 匹配的 ZIP：Apple Silicon 选择 `arm64`，Intel 选择 `x86_64`。
+**环境**：Mac 上有 HTTP/mixed 代理；Linux 服务器具备 SSH、ss 和 curl，支持密钥登录及反向转发。
+应用构建目标为 macOS 13+，已验证环境与限制见[验证记录](docs/VALIDATION.md)。
 
-预览包使用 ad-hoc 签名，尚未经过 Developer ID 签名或 Apple 公证，macOS 可能阻止直接打开。
-当前适合开发者试用；验证范围与已知限制见预发布说明。
+1. 启动 Mac 本地代理，确认其 HTTP/mixed 端口。
+2. 在 CATunnel 点击 **＋**，填写服务器地址、SSH 用户、密钥及两端端口。
+3. 按引导核实 SSH 主机指纹，点击 **检查连接准备**；通过后保存并开启隧道。
+4. 将远端工具指向服务器上的代理地址，例如 `http://127.0.0.1:17892`。
 
-### 安装与首次打开
+`7890`（Mac 代理）和 `17892`（服务器入口）是默认示例端口，可按需调整。
+首次启动服务器列表为空。详细配置、检查命令和排障见[使用指南](docs/USAGE.md)。
 
-1. 从上面的项目 Release 页面下载对应架构的 `.zip`，无需下载源码包或构建信息 JSON。
-2. 双击 ZIP 解压，将 `CATunnel.app` 拖入“应用程序”文件夹。
-3. 在“应用程序”中双击 `CATunnel.app`。若被 macOS 阻止，请按下一节处理。
-4. 启动后，点击屏幕顶部菜单栏中的双向箭头圆形图标，展开 CATunnel 面板。
-   正常启动不会自动弹出主窗口，也不显示 Dock 图标。
-5. 首次使用时，点击“使用引导”，准备本地代理和 SSH 连接，再添加自己的服务器。
+目前不支持 SSH 别名、ProxyJump、交互式密码登录和 IPv6 主机地址。
+API 可达不等于账号或模型可用；IP 评分默认关闭，仅供参考。
 
-### 首次打开被 macOS 阻止时
+## TODO
 
-如果提示无法验证开发者，或 Apple 无法检查 App 是否包含恶意软件，且你已确认下载来源可信，
-可按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)为这个 App 单独允许打开：
+- [ ] 英文界面。
+- [ ] SSH 别名与跳板机支持。
+- [ ] 配置导入、导出与迁移方案。
+- [ ] Homebrew 安装与更新体验。
 
-1. 先尝试双击 `CATunnel.app`，在拦截提示中选择“完成”或“取消”。
-2. 打开 **系统设置 → 隐私与安全性**，向下找到“安全性”区域中 CATunnel 被阻止的提示。
-3. 点击 **仍要打开**，按系统要求认证，并在再次确认时选择“打开”。不同 macOS 版本的按钮文字可能略有差异。
-4. 允许后，再从菜单栏图标打开面板。系统会为这个 App 保存例外，后续通常可直接启动。
+优先级、待设计事项和验收清单见 [ROADMAP.md](ROADMAP.md)。项目通过 GitHub 发布，无 App Store 上架计划。
 
-若没有“仍要打开”，先重新尝试打开 App，再回到上述设置；受单位管理的 Mac 可能限制此操作，
-需要联系管理员。此流程只允许指定 App，无需关闭整个系统的 Gatekeeper。
+## 文档与贡献
 
-**如果提示“已损坏”“将损坏你的电脑”或检测到恶意软件，不要把它当成普通的未公证提示。**
-停止打开，记录完整提示、macOS 版本和下载包名称，并向项目提交 Issue 排查。
+| 文档 | 内容 |
+| --- | --- |
+| [使用指南](docs/USAGE.md) | 安装、SSH 准备、代理配置、启动设置与排障 |
+| [AGENTS.md](AGENTS.md) | 给 AI Agent 的配置格式、命令、验证与操作约定 |
+| [贡献指南](CONTRIBUTING.md) | 源码构建、离线演示、测试与项目结构 |
+| [验证记录](docs/VALIDATION.md) / [发布说明](docs/RELEASING.md) | 已验证范围与打包流程 |
+| [更新日志](CHANGELOG.md) | 版本变更 |
 
-以上是 Apple 提供的通用打开流程。当前预览包尚未完成全新 Mac／账户下、通过浏览器下载后的
-Gatekeeper 安装实测；构建与 ZIP 校验通过不代表所有 Mac 均可按此流程成功打开。
-已验证范围见[验证记录](docs/VALIDATION.md#clean-configuration-versus-a-clean-mac)。
+欢迎通过 [Issues](https://github.com/YusenHou519/CATunnel/issues) 反馈问题或提出功能建议。
 
-## 环境要求
-
-- 构建目标：macOS 13+；构建需要 Xcode 或 Command Line Tools 提供 Swift 5.9+。
-  Swift 包没有外部依赖。
-- 真实连接：Linux 服务器，需要 OpenSSH、`ss`、`curl`，以及 Mac 上可用的
-  HTTP 或兼容 HTTP 的 mixed 代理端口。
-- SSH：主机指纹已存在于 `known_hosts`，使用默认密钥文件、可用的 SSH agent，
-  或在编辑器中指定私钥文件。加密密钥需要先加载到 agent，供应用非交互认证使用。
-  应用严格验证主机指纹，不自动接受未知主机。
-
-最低构建目标不代表所有系统和架构均已实测；已验证环境及待验项目见
-[验证记录](docs/VALIDATION.md)。
-
-暂不支持 SSH 别名、跳板机、交互式密码、IPv6 SSH 主机地址及应用内
-首次信任主机。连接使用 `-F /dev/null`，不继承 `~/.ssh/config`。
-
-## 构建与离线检查
-
-克隆公开源码仓库：
-
-```bash
-git clone https://github.com/YusenHou519/CATunnel.git
-cd CATunnel
-```
-
-然后在仓库根目录执行：
-
-```bash
-bash scripts/check.sh
-bash scripts/build-app.sh
-```
-
-前者运行 `TunnelCoreChecks` 离线检查程序，当前测试入口不是 `swift test`。
-后者生成 `dist/CATunnel.app` 并验证本机 ad-hoc 签名，不会启动应用。
-产物针对构建机器的架构，不是通用架构安装包。
-
-如需保留当前 `dist/CATunnel.app`，可将新包输出到独立目录：
-
-```bash
-CATUNNEL_OUTPUT_DIR="$PWD/verification/build" bash scripts/build-app.sh
-```
-
-仅当受限开发环境无法嵌套运行 SwiftPM 清单沙箱时，可给上述命令加上
-`CATUNNEL_DISABLE_SWIFTPM_SANDBOX=1`。默认构建保留 SwiftPM 的沙箱行为。
-
-以下命令需要已登录的 macOS 图形会话，请分开执行：
-
-```bash
-./dist/CATunnel.app/Contents/MacOS/CATunnel --demo
-./dist/CATunnel.app/Contents/MacOS/CATunnel --ui-check "$PWD/verification/ui/report.json"
-```
-
-演示及界面检查均使用模拟数据，不建立 SSH 连接，不读取或保存日常应用设置。
-界面检查会自动退出，报告与预览图写入被 Git 忽略的 `verification/`。
-核心离线检查会创建自己的短时本地子进程和临时文件。
-
-## 隔离集成测试与预览打包
-
-以下集成测试会在回环地址启动临时 SSH 服务，使用临时密钥和独立主机信任文件，
-不连接已配置服务器、不使用个人代理。macOS 测试环境通过真实监听查询适配 Linux
-的 `ss` 检查；它不能替代真实 Linux 部署验证。
-
-```bash
-bash scripts/check-integration.sh
-bash scripts/package-release.sh
-```
-
-打包产物位于 `verification/release/`，不会替换已有的 `dist/CATunnel.app`。
-发布步骤和解压验证命令见 [发布文档](docs/RELEASING.md)。工程提供 GitHub Actions
-构建检查配置；本地通过不代表云端 CI 已运行。安装验证范围和剩余限制见
-[验证记录](docs/VALIDATION.md)。
-
-## 使用方式
-
-1. 打开 `dist/CATunnel.app`，点击菜单栏图标。
-2. 点击“添加服务器”或上方 **+**，填写显示名称、主机、SSH 用户和端口、本机代理端口、服务器回环端口；按需选择私钥文件。
-3. 在编辑器中点击“检查连接准备”，保存后手动开启对应隧道，再按需检测网站。
-4. 让需要联网的远端程序显式使用界面给出的代理地址。
-
-例如服务器端口为 `17892` 时，其代理地址为 `http://127.0.0.1:17892`。
-连接或检测中的配置需要先停止才能编辑、删除。删除前会请求确认，只移除本地条目。
-删除当前服务器后会选择相邻条目，删除最后一个后恢复空列表；其他服务器的连接和检测不受影响。
-每台服务器的连接、检测与日志互相独立，服务器较多时顶部标签可横向滚动。
-关闭面板不会停止隧道；退出应用会停止它自己创建的连接。支持临时网络错误后的自动重连，
-可在面板设置中调整宽度与字号。
-
-### 登录启动与自动连接
-
-面板齿轮打开“设置”，可分别调整：
-
-- **登录时启动**：Mac 登录后打开 CATunnel，不直接决定服务器连接。
-- **启动后自动连接**：按服务器选择下次启动 CATunnel 时要连接的条目。新服务器和旧配置默认关闭；
-  在这里修改已连接服务器的开关也不会断开或重建当前隧道。服务器编辑器中也可设置此项。
-- **意外断开后自动重连**：恢复已经开启的隧道，与上述两个开关独立；手动断开后不会自动拉回。
-
-登录启动使用 macOS 登录项服务；若系统要求批准，设置页会提示并提供打开系统登录项设置的入口。
-请先将应用放在固定位置（通常是“应用程序”），再启用登录启动。
-此前由 CATunnel 手工配置的登录启动项会被只读识别；只有主动切换开关时才会备份并处理已识别的旧项，
-无法识别的内容会保留并显示错误。仅打开设置不会迁移登录项。
-离线演示的所有开关只改示例状态，不注册登录项、不保存日常配置、不连接服务器。
-这些开关从 `v0.6.0-preview.2`（build 5）起包含在下载包中。
-
-## 首次使用引导与 SSH 准备
-
-从面板或服务器概览打开“使用引导”，按步骤准备本机 HTTP/mixed 代理、确认 SSH
-访问，再让远端程序使用隧道代理地址。引导不会执行命令或修改远端工具配置。
-
-编辑器中的“检查连接准备”需要主动点击，与网站检测分开，分别检查：
-
-- Mac 的 `127.0.0.1` 对应端口是否接受 TCP 连接。端口可达不代表 HTTP 代理一定可用。
-- 指定密钥文件是否可访问，仅检查文件属性，不读取私钥内容。
-- 严格验证主机指纹的非交互 SSH 认证是否成功。
-- 服务器是否具备 `ss` 和 `curl`。
-
-此 SSH 检查只执行只读依赖命令，不建立反向转发或复用其他应用的控制连接，不访问外部网站。
-修改表单或关闭编辑器会取消检查并清除旧结果；保存服务器不会自动连接。
-
-未知或变化的主机指纹仍会阻止连接。可复制编辑器提供的终端验证命令，独立核对指纹后自行执行；
-应用不会替你接受指纹或修改 `known_hosts`。加密密钥请先在终端加载到 SSH agent。
-CATunnel 只保存选择的文件路径，不导入密钥内容，也不保存口令。
-
-## 检测和数据
-
-检测由用户主动触发，依次提供 OpenAI API、Claude 网络、Claude API、Google 的结果，
-可按服务器选择是否向 Net.Coffee 查询 Claude 出口公网 IP 的风险信息。详细端点见[英文 README](README.en.md#network-checks-and-data)。
-该开关默认关闭；开启后，下次主动检测才会将出口公网 IP 提交给 Net.Coffee。
-关闭时仍保留 Claude 网络连通性与出口 IP，评分显示为跳过，不请求 Net.Coffee。
-检测不发送 API Key、Cookie 或模型提示词，没有埋点或遥测。
-
-API 返回未认证的 HTTP 401 可以证明网络可达，不代表账号登录或模型调用成功。
-信任分仅供参考；网段缓存会明确标注，不当作单个 IP 的实时结果。
-第三方接口失效不会断开已建立的 SSH 隧道。
-
-应用使用独立配置目录：
-
-```text
-~/Library/Application Support/CATunnel/profiles.json
-~/Library/Application Support/CATunnel/ui-preferences.json
-```
-
-开发版标识为 `local.catunnel.CATunnel`，不会导入其他应用的设置。
-SSH 控制套接字位于私有临时目录，最近日志和检测结果仅保存在内存中。
-不保存密码、私钥或 API 凭据。
-
-服务器配置采用带版本号的 JSON：
-
-```json
-{"version": 1, "profiles": []}
-```
-
-兼容此前的数组格式，仅在主动保存配置变更时升级。重复 ID 和冲突的服务器端口会被拒绝。
-缺少 `identityFile` 字段时使用默认密钥/agent，缺少 `assessIPRisk` 时默认关闭第三方评分。
-缺少 `autoConnectOnLaunch` 时默认不自动连接；该字段与 `autoReconnect` 分别保存。
-配置无法读取、内容损坏或版本不受支持时，界面会提示错误并阻止写入，保留原文件；
-修复后重启应用可重新加载。仅首次打开应用不会创建服务器配置文件。
-
-**本地服务器列表与远端工具配置互相独立。** 新增、编辑、删除条目都不会修改服务器上的
-`.codex`、`.claude` 或 shell 配置。未来正式切换代理时，再按远端程序的启动方式配置其代理使用。
-
-## 开发与许可证
-
-源码结构、开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，后续计划见
-[ROADMAP.md](ROADMAP.md)。采用 [MIT 许可证](LICENSE)，设计参考见
-[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)。
+[MIT License](LICENSE) · [致谢](ACKNOWLEDGMENTS.md)

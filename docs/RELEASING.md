@@ -1,12 +1,13 @@
 # Preparing a release
 
-CATunnel 0.6.0 is in development. The default output is an **ad-hoc-signed
-preview**, not a notarized public release. Packaging never launches an app,
+CATunnel previews are distributed through GitHub Releases; there is no App Store
+plan. The default output is an **ad-hoc-signed preview**, without Apple
+notarization. Packaging never launches an app,
 installs it, changes its preferences, or opens an SSH connection.
 
 ## Build and archive
 
-Use a macOS source checkout with the build requirements described in the README:
+Use a macOS source checkout with the build requirements in [CONTRIBUTING.md](../CONTRIBUTING.md):
 
 ```bash
 bash scripts/check.sh
@@ -114,17 +115,19 @@ The first public source commit passed both hosted architecture jobs on macOS
 Check the workflow result for the exact commit being distributed. Hosted checks
 do not include graphical app use, a clean-Mac installation, or notarization.
 
-Before a public release:
+Before a GitHub release:
 
-1. Validate the clean extracted artifact and the SSH integration fixture. Record
-   actual architecture/OS coverage and any manual sleep/wake checks separately.
+1. Update `CFBundleShortVersionString` and increment `CFBundleVersion` for changed
+   distributions, preserving the existing application identifier/settings path.
 2. Verify the source contains no local profiles, private hosts, keys, logs, or
    personal screenshots. Commit the reviewed source and rebuild from that commit
    with a clean working tree so the metadata identifies the released source.
-3. Update `CFBundleShortVersionString` and increment `CFBundleVersion` for changed
-   distributions, preserving the existing application identifier/settings path.
-4. For ordinary end-user installation, use Developer ID signing and notarization
-   and test the downloaded, quarantined archive on a clean Mac/user environment.
+3. Validate the clean extracted artifact and the SSH integration fixture. Record
+   actual architecture/OS coverage and any manual sleep/wake checks separately.
+4. Test the downloaded, quarantined archive on a clean Mac/user environment and
+   document its installation behavior. Developer ID signing and notarization are
+   optional improvements to the GitHub download experience, not a prerequisite
+   for publishing a clearly labeled preview. See the [installation guide](USAGE.en.md).
 5. Publish the ZIP and `RELEASE.json` together with the exact source
    tag, scope of testing, and known limitations. Publishing is a separate action;
    these scripts do not create a repository, commit, tag, push, or release.
