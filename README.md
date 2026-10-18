@@ -1,237 +1,179 @@
 # CATunnel — Coding Agent Tunnel
 
-[![Validate and package preview](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
+[![构建与预览验证](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
 
-[简体中文](README.zh-CN.md)
+[English](README.en.md)
 
-A lightweight native macOS menu-bar app that lets remote tools use a local
-HTTP proxy through an SSH reverse tunnel.
+轻量级原生 macOS 菜单栏应用，让远端工具通过 SSH 反向隧道使用 Mac 上的本地 HTTP 代理。
 
 ```text
-Remote tool → server loopback proxy port → SSH tunnel → Mac local proxy → Internet
+远端工具 → 服务器回环代理端口 → SSH 隧道 → Mac 本地代理 → 外网
 ```
 
-## Development status
+## 当前阶段
 
-This is the standalone source preview of CATunnel 0.6.0 (build 4).
-Local preview archives use an ad-hoc signature. They are not Developer ID signed
-or notarized public releases.
+这是 0.6.0（build 4）的独立源码预览版。本地预览包使用 ad-hoc 签名，
+尚未制作经过 Developer ID 签名及 Apple 公证的公开发行版。
+正常首次启动为空列表，可新增、编辑、删除任意数量的服务器。
+只有离线演示预置 A、B 两个示例；`.example` 主机仅作占位，填写真实主机前无法建立真实连接。
+界面目前为中文。
 
-Normal first launch starts with an empty server list. Add, edit, and delete your
-own profiles; there is no fixed two-server limit. The offline demo alone starts
-with example profiles **A** and **B**. Their `.example` hosts are placeholders,
-and real connection attempts are rejected until the host is changed. The current
-application interface is in Chinese.
+应用管理自己创建的 SSH 连接。需要用户已有本地代理；应用不会修改 SSH、shell、
+编辑器或远端工具的代理配置，也不会让已打开的远端终端自动切换代理。
 
-The app manages its own SSH processes and settings. It does not configure remote
-tools to use a proxy, modify SSH or shell configuration, or provide a proxy service
-itself. A compatible local proxy must already be available.
+## 预览版下载
 
-## Requirements
+在 [GitHub 预发布页面](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.0-preview.1)
+下载与你的 Mac 匹配的 ZIP：Apple Silicon 选择 `arm64`，Intel 选择 `x86_64`。
+解压后可将 `CATunnel.app` 移入“应用程序”文件夹，再从菜单栏打开。
 
-- **Deployment target:** macOS 13 or later, with Xcode or Command Line Tools providing
-  Swift 5.9 or later to build from source. The package has no external dependencies.
-- **For a real connection:** a Linux SSH server with `ss` and `curl`, and a Mac
-  HTTP proxy or HTTP-compatible mixed proxy port bound to loopback.
-- **Authentication:** an existing trusted host entry in `known_hosts`, plus a
-  default SSH key, an available SSH agent, or a selected identity file. SSH uses
-  strict host-key checking. Encrypted keys must be available through the agent
-  for the app's noninteractive connections.
+预览包使用 ad-hoc 签名，尚未经过 Developer ID 签名或 Apple 公证，macOS 可能阻止直接打开。
+当前适合开发者试用；验证范围与已知限制见预发布说明。
 
-The deployment target is not a claim that every supported OS/architecture has
-been tested. See the [validation matrix](docs/VALIDATION.md) for observed results
-and remaining checks.
+## 环境要求
 
-SSH aliases, jump hosts, interactive passwords,
-IPv6 SSH host addresses, and in-app host-fingerprint enrollment are not yet
-supported. The app deliberately ignores `~/.ssh/config` for its owned connections.
+- 构建目标：macOS 13+；构建需要 Xcode 或 Command Line Tools 提供 Swift 5.9+。
+  Swift 包没有外部依赖。
+- 真实连接：Linux 服务器，需要 OpenSSH、`ss`、`curl`，以及 Mac 上可用的
+  HTTP 或兼容 HTTP 的 mixed 代理端口。
+- SSH：主机指纹已存在于 `known_hosts`，使用默认密钥文件、可用的 SSH agent，
+  或在编辑器中指定私钥文件。加密密钥需要先加载到 agent，供应用非交互认证使用。
+  应用严格验证主机指纹，不自动接受未知主机。
 
-## Build and check
+最低构建目标不代表所有系统和架构均已实测；已验证环境及待验项目见
+[验证记录](docs/VALIDATION.md)。
 
-Clone the public source repository:
+暂不支持 SSH 别名、跳板机、交互式密码、IPv6 SSH 主机地址及应用内
+首次信任主机。连接使用 `-F /dev/null`，不继承 `~/.ssh/config`。
+
+## 构建与离线检查
+
+克隆公开源码仓库：
 
 ```bash
 git clone https://github.com/YusenHou519/CATunnel.git
 cd CATunnel
 ```
 
-Then, from the repository root:
+然后在仓库根目录执行：
 
 ```bash
 bash scripts/check.sh
 bash scripts/build-app.sh
 ```
 
-The first command runs the offline `TunnelCoreChecks` executable. This project
-does not currently use `swift test`. The second command creates
-`dist/CATunnel.app`, verifies its local ad-hoc signature, and does not launch it.
-It builds for the current Mac architecture; this is not a universal binary.
+前者运行 `TunnelCoreChecks` 离线检查程序，当前测试入口不是 `swift test`。
+后者生成 `dist/CATunnel.app` 并验证本机 ad-hoc 签名，不会启动应用。
+产物针对构建机器的架构，不是通用架构安装包。
 
-To build a separate review copy without replacing `dist/CATunnel.app`:
+如需保留当前 `dist/CATunnel.app`，可将新包输出到独立目录：
 
 ```bash
 CATUNNEL_OUTPUT_DIR="$PWD/verification/build" bash scripts/build-app.sh
 ```
 
-Only if a restricted build environment cannot run SwiftPM's manifest sandbox,
-use `CATUNNEL_DISABLE_SWIFTPM_SANDBOX=1` before these commands. Regular builds
-retain SwiftPM's default sandbox behavior.
+仅当受限开发环境无法嵌套运行 SwiftPM 清单沙箱时，可给上述命令加上
+`CATUNNEL_DISABLE_SWIFTPM_SANDBOX=1`。默认构建保留 SwiftPM 的沙箱行为。
 
-## Offline demo and UI checks
-
-These commands require a logged-in macOS graphical session. They use simulated
-states and do not create SSH connections or read/write normal app settings.
+以下命令需要已登录的 macOS 图形会话，请分开执行：
 
 ```bash
 ./dist/CATunnel.app/Contents/MacOS/CATunnel --demo
 ./dist/CATunnel.app/Contents/MacOS/CATunnel --ui-check "$PWD/verification/ui/report.json"
 ```
 
-Run them separately. The UI check exits automatically and writes a JSON report
-and rendered previews under `verification/`, which is excluded from Git. The
-core checks also exercise short-lived local child processes and temporary files.
+演示及界面检查均使用模拟数据，不建立 SSH 连接，不读取或保存日常应用设置。
+界面检查会自动退出，报告与预览图写入被 Git 忽略的 `verification/`。
+核心离线检查会创建自己的短时本地子进程和临时文件。
 
-## Integration checks and preview archives
+## 隔离集成测试与预览打包
 
-The explicit integration check starts disposable SSH services on loopback with
-temporary keys and its own host-trust files. It does not connect to configured
-servers or use a contributor's proxy. On macOS, a real listener-query adapter
-replaces the Linux `ss` command in the fixture; Linux deployment still needs
-separate validation.
+以下集成测试会在回环地址启动临时 SSH 服务，使用临时密钥和独立主机信任文件，
+不连接已配置服务器、不使用个人代理。macOS 测试环境通过真实监听查询适配 Linux
+的 `ss` 检查；它不能替代真实 Linux 部署验证。
 
 ```bash
 bash scripts/check-integration.sh
 bash scripts/package-release.sh
 ```
 
-Packaging builds an independent preview under `verification/release/` and does
-not replace `dist/CATunnel.app`. The release process and archive verification
-commands are in [RELEASING.md](docs/RELEASING.md). GitHub Actions definitions build
-and check the project; local success does not establish that a hosted CI run has
-passed. Distribution and installation limitations are recorded in
-[VALIDATION.md](docs/VALIDATION.md).
+打包产物位于 `verification/release/`，不会替换已有的 `dist/CATunnel.app`。
+发布步骤和解压验证命令见 [发布文档](docs/RELEASING.md)。工程提供 GitHub Actions
+构建检查配置；本地通过不代表云端 CI 已运行。安装验证范围和剩余限制见
+[验证记录](docs/VALIDATION.md)。
 
-## Normal use
+## 使用方式
 
-1. Launch `dist/CATunnel.app` and open the menu-bar panel.
-2. Choose **Add server** (`添加服务器`) or the **+** button, and enter a display name,
-   host, SSH user, SSH port, local proxy port, and remote loopback port. Select
-   an identity file if you do not use the default keys or SSH agent.
-3. Use **Check setup** (`检查连接准备`) in the editor, then save and start the tunnel.
-   Run its website checks if desired.
-4. Explicitly point your remote tool at the displayed proxy address to use it.
+1. 打开 `dist/CATunnel.app`，点击菜单栏图标。
+2. 点击“添加服务器”或上方 **+**，填写显示名称、主机、SSH 用户和端口、本机代理端口、服务器回环端口；按需选择私钥文件。
+3. 在编辑器中点击“检查连接准备”，保存后手动开启对应隧道，再按需检测网站。
+4. 让需要联网的远端程序显式使用界面给出的代理地址。
 
-For example, a remote port of `17892` provides `http://127.0.0.1:17892` on that
-server. Starting a tunnel does not change the environment of an existing shell
-or configure Codex, Claude, or an editor. Adding, editing, or removing a server
-does not edit remote `.codex` / `.claude` directories or remote shell files.
+例如服务器端口为 `17892` 时，其代理地址为 `http://127.0.0.1:17892`。
+连接或检测中的配置需要先停止才能编辑、删除。删除前会请求确认，只移除本地条目。
+删除当前服务器后会选择相邻条目，删除最后一个后恢复空列表；其他服务器的连接和检测不受影响。
+每台服务器的连接、检测与日志互相独立，服务器较多时顶部标签可横向滚动。
+关闭面板不会停止隧道；退出应用会停止它自己创建的连接。支持临时网络错误后的自动重连，
+尚未设置登录自启。可在面板设置中调整宽度与字号。
 
-Changing or removing a profile requires stopping that profile's connection and
-checks first. Deletion asks for confirmation and removes only the local profile.
-Deleting the selected profile selects a neighboring profile; deleting the last
-one returns to the empty list. Other profiles' connections and results are kept.
+## 首次使用引导与 SSH 准备
 
-Each profile has independent connection state, logs, and checks. The top tabs
-scroll horizontally when there are many servers. The panel
-supports adjustable width and font size. Closing the panel keeps owned tunnels
-running; quitting the app stops them. Automatic reconnection is available for
-transient errors. Login startup is not configured.
+从面板或服务器概览打开“使用引导”，按步骤准备本机 HTTP/mixed 代理、确认 SSH
+访问，再让远端程序使用隧道代理地址。引导不会执行命令或修改远端工具配置。
 
-## First-use guide and SSH setup
+编辑器中的“检查连接准备”需要主动点击，与网站检测分开，分别检查：
 
-Open **Getting started** (`使用引导`) from the panel or server overview. The guide
-explains preparing a local HTTP/mixed proxy, confirming SSH access, and pointing
-remote programs at the tunnel's loopback address. It does not run commands or
-edit remote application settings.
+- Mac 的 `127.0.0.1` 对应端口是否接受 TCP 连接。端口可达不代表 HTTP 代理一定可用。
+- 指定密钥文件是否可访问，仅检查文件属性，不读取私钥内容。
+- 严格验证主机指纹的非交互 SSH 认证是否成功。
+- 服务器是否具备 `ss` 和 `curl`。
 
-The editor's setup check is separate from the website checks. It runs only after
-you click its button and reports:
+此 SSH 检查只执行只读依赖命令，不建立反向转发或复用其他应用的控制连接，不访问外部网站。
+修改表单或关闭编辑器会取消检查并清除旧结果；保存服务器不会自动连接。
 
-- Whether `127.0.0.1` at the configured local proxy port accepts a TCP connection.
-  An open port alone does not establish that it is a working HTTP proxy.
-- Whether a selected identity file is accessible, using file metadata only.
-- Whether strict, noninteractive SSH authentication succeeds.
-- Whether `ss` and `curl` are available on the server.
+未知或变化的主机指纹仍会阻止连接。可复制编辑器提供的终端验证命令，独立核对指纹后自行执行；
+应用不会替你接受指纹或修改 `known_hosts`。加密密钥请先在终端加载到 SSH agent。
+CATunnel 只保存选择的文件路径，不导入密钥内容，也不保存口令。
 
-The SSH setup probe executes a read-only dependency command, creates no reverse
-forward or reusable control connection, and does not contact external websites.
-Changing form fields or closing the editor cancels the check and clears stale
-results. Saving never automatically connects a server.
+## 检测和数据
 
-Unknown or changed host fingerprints remain an error. Copy the editor's terminal
-verification command, verify the fingerprint independently, and run it yourself
-if you wish to establish trust. CATunnel never accepts a fingerprint or edits
-`known_hosts` for you. For encrypted keys, load the selected key into your SSH
-agent from a terminal before connecting. Only the file path is saved; key
-contents and passphrases are never imported into CATunnel.
+检测由用户主动触发，依次提供 OpenAI API、Claude 网络、Claude API、Google 的结果，
+可按服务器选择是否向 Net.Coffee 查询 Claude 出口公网 IP 的风险信息。详细端点见[英文 README](README.en.md#network-checks-and-data)。
+该开关默认关闭；开启后，下次主动检测才会将出口公网 IP 提交给 Net.Coffee。
+关闭时仍保留 Claude 网络连通性与出口 IP，评分显示为跳过，不请求 Net.Coffee。
+检测不发送 API Key、Cookie 或模型提示词，没有埋点或遥测。
 
-## Network checks and data
+API 返回未认证的 HTTP 401 可以证明网络可达，不代表账号登录或模型调用成功。
+信任分仅供参考；网段缓存会明确标注，不当作单个 IP 的实时结果。
+第三方接口失效不会断开已建立的 SSH 隧道。
 
-Checks run only when requested and use the selected server's tunnel:
-
-| Check | Endpoint | What it establishes |
-| --- | --- | --- |
-| OpenAI API | `https://api.openai.com/v1/models` | HTTPS transport; an unauthenticated 401 is accepted |
-| Claude network | `https://claude.ai/cdn-cgi/trace` | HTTPS reachability and the observed exit IP |
-| Claude API | `https://api.anthropic.com/v1/models` | HTTPS transport; an unauthenticated 401 is accepted |
-| Google | `https://www.google.com/generate_204` | HTTPS reachability |
-| Net.Coffee risk | `https://ip.net.coffee/api/iprisk/{ip}` | Third-party assessment of the Claude exit IP |
-
-Net.Coffee is an optional per-server setting, disabled by default. Enable it in
-the server editor to include its request when you next run website checks. It
-sends the observed public exit IP to that service. With the option off, Claude's
-network trace still reports the exit IP, while the assessment is shown as skipped
-and Net.Coffee is not contacted. No API keys, cookies, or model prompts are sent.
-The app has no analytics or telemetry.
-Third-party check failures do not stop an established SSH tunnel.
-
-The score is **for reference only**, not a guarantee of account access or model
-availability. Responses based on a containing network are labeled as cached
-network assessments rather than exact-IP measurements. External endpoints may
-change or become unavailable.
-
-Settings are stored only in:
+应用使用独立配置目录：
 
 ```text
 ~/Library/Application Support/CATunnel/profiles.json
 ~/Library/Application Support/CATunnel/ui-preferences.json
 ```
 
-The development bundle identifier is `local.catunnel.CATunnel`. This standalone
-project does not import settings from other applications. SSH control sockets
-use private temporary directories; recent logs and check results stay in memory.
-The app does not store passwords, private keys, or API credentials.
+开发版标识为 `local.catunnel.CATunnel`，不会导入其他应用的设置。
+SSH 控制套接字位于私有临时目录，最近日志和检测结果仅保存在内存中。
+不保存密码、私钥或 API 凭据。
 
-Server profiles are saved in a versioned JSON document:
+服务器配置采用带版本号的 JSON：
 
 ```json
 {"version": 1, "profiles": []}
 ```
 
-The previous array format is still readable and is upgraded only when a profile
-change is explicitly saved. Duplicate IDs and conflicting server/port entries
-are rejected. Profiles missing `identityFile` use default keys/agent; profiles
-missing `assessIPRisk` default to false. If the profile file is unreadable, invalid, or from an unsupported
-version, the app shows an error and blocks profile writes, preserving the original
-file. Correct the file and restart the app to load it again. A fresh launch alone
-does not create a server configuration file.
+兼容此前的数组格式，仅在主动保存配置变更时升级。重复 ID 和冲突的服务器端口会被拒绝。
+缺少 `identityFile` 字段时使用默认密钥/agent，缺少 `assessIPRisk` 时默认关闭第三方评分。
+配置无法读取、内容损坏或版本不受支持时，界面会提示错误并阻止写入，保留原文件；
+修复后重启应用可重新加载。仅首次打开应用不会创建服务器配置文件。
 
-## Project layout
+**本地服务器列表与远端工具配置互相独立。** 新增、编辑、删除条目都不会修改服务器上的
+`.codex`、`.claude` 或 shell 配置。未来正式切换代理时，再按远端程序的启动方式配置其代理使用。
 
-```text
-Sources/CATunnel/          Native menu panel, windows, preferences, lifecycle
-Sources/TunnelCore/        SSH ownership, state, validation, connection checks
-Tests/TunnelCoreTests/     Offline executable checks
-Tests/TunnelIntegrationChecks/  Disposable local SSH integration checks
-Resources/Info.plist       Application metadata
-scripts/                  Build, local checks, and generated icon
-docs/                     Release and validation instructions
-```
+## 开发与许可证
 
-Local outputs, machine settings, verification records, and backups are excluded
-from the repository. See [CONTRIBUTING.md](CONTRIBUTING.md) for development
-boundaries and [ROADMAP.md](ROADMAP.md) for the remaining release work.
-
-## License and acknowledgments
-
-[MIT](LICENSE). See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for design references.
+源码结构、开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，后续计划见
+[ROADMAP.md](ROADMAP.md)。采用 [MIT 许可证](LICENSE)，设计参考见
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md)。
