@@ -13,6 +13,22 @@ HTTP proxy through an SSH reverse tunnel.
 Remote tool → server loopback proxy port → SSH tunnel → Mac local proxy → Internet
 ```
 
+## Interface preview
+
+These screenshots show the actual app in offline demo mode with example servers A / B.
+Connection states and check results are simulated. The current UI is in Chinese.
+Click an image to view it at full size.
+
+| Menu-bar panel | Startup and appearance settings |
+| :---: | :---: |
+| <a href="docs/assets/screenshots/menu-panel.png"><img src="docs/assets/screenshots/menu-panel.png" width="320" alt="CATunnel menu-bar panel with server tabs, a tunnel switch, and service reachability checks"></a> | <a href="docs/assets/screenshots/settings.png"><img src="docs/assets/screenshots/settings.png" width="320" alt="CATunnel settings for launch at login, per-server automatic connections, panel width, and font size"></a> |
+| Switch servers and inspect tunnel status and service reachability. | Adjust launch at login, automatic connections, panel width, and font size. |
+
+| Server configuration | Getting started |
+| :---: | :---: |
+| <a href="docs/assets/screenshots/server-editor.png"><img src="docs/assets/screenshots/server-editor.png" width="380" alt="CATunnel server editor with SSH host, user, key, and proxy port settings"></a> | <a href="docs/assets/screenshots/getting-started.png"><img src="docs/assets/screenshots/getting-started.png" width="380" alt="CATunnel getting-started guide covering the local proxy, SSH login, and manual connection"></a> |
+| Configure the SSH host, user, key, and proxy ports on both ends. | Prepare the local proxy, verify SSH access, then save and connect. |
+
 ## Development status
 
 This is the standalone preview of CATunnel 0.6.0 (build 5, `v0.6.0-preview.2`).

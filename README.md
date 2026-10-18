@@ -12,6 +12,21 @@
 远端工具 → 服务器回环代理端口 → SSH 隧道 → Mac 本地代理 → 外网
 ```
 
+## 界面预览
+
+以下为应用离线演示的实际界面，使用示例服务器 A / B；连接状态与检测结果均为模拟数据。
+点击图片可查看原图。
+
+| 菜单栏主面板 | 启动与外观设置 |
+| :---: | :---: |
+| <a href="docs/assets/screenshots/menu-panel.png"><img src="docs/assets/screenshots/menu-panel.png" width="320" alt="CATunnel 菜单栏主面板：服务器页签、隧道开关与服务连通性检测"></a> | <a href="docs/assets/screenshots/settings.png"><img src="docs/assets/screenshots/settings.png" width="320" alt="CATunnel 设置：登录启动、服务器自动连接、面板宽度与字体大小"></a> |
+| 切换服务器，查看隧道状态和服务连通性。 | 分别调整登录启动、自动连接、面板宽度与字号。 |
+
+| 服务器配置 | 首次使用引导 |
+| :---: | :---: |
+| <a href="docs/assets/screenshots/server-editor.png"><img src="docs/assets/screenshots/server-editor.png" width="380" alt="CATunnel 添加服务器窗口：SSH 地址、用户、密钥及代理端口配置"></a> | <a href="docs/assets/screenshots/getting-started.png"><img src="docs/assets/screenshots/getting-started.png" width="380" alt="CATunnel 使用引导：本地代理、SSH 登录与手动连接三个步骤"></a> |
+| 填写 SSH 地址、用户、密钥与两端代理端口。 | 按本地代理、SSH 登录、保存连接三个步骤完成准备。 |
+
 ## 当前阶段
 
 这是 0.6.0（build 5，`v0.6.0-preview.2`）的独立预览版。预览包使用 ad-hoc 签名，
