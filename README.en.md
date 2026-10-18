@@ -1,3 +1,5 @@
+![CATunnel cover: a laptop connects to remote servers through a mountain tunnel](docs/assets/catunnel-cover-v1.png)
+
 # CATunnel — Coding Agent Tunnel
 
 [![Validate and package preview](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)

@@ -1,3 +1,5 @@
+![CATunnel 封面：笔记本通过山中隧道连接远程服务器](docs/assets/catunnel-cover-v1.png)
+
 # CATunnel — Coding Agent Tunnel
 
 [![构建与预览验证](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
