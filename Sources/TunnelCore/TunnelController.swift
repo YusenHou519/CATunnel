@@ -118,12 +118,20 @@ public final class TunnelController {
         for command in session.probes.values { command.stop() }
         stopFixedGateway(session)
         if session.fixedReleaseTask == nil {
-            if let lease = session.fixedLease, session.master?.isRunning == true {
+            if let lease = session.fixedLease, let master = session.master, master.isRunning {
                 session.fixedLease = nil
                 session.fixedReleaseTask = Task { [weak self, weak session] in
                     guard let self, let session else { return }
+                    // A timed-out mux request can still await pipe EOF from its master.
+                    // Bound the release grace period independently of that completion.
+                    let stopMaster = Task {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        master.stop()
+                    }
+                    defer { stopMaster.cancel() }
                     _ = try? await self.runFixedControl(session, request: .release(lease), timeout: 1, retiring: true)
-                    session.master?.stop()
+                    master.stop()
                     session.fixedReleaseTask = nil
                     if session.master?.isRunning != true { self.cleanup(session) }
                 }

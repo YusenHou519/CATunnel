@@ -299,7 +299,9 @@ class SwiftCheckRun(CheckRun):
         self.event_offset = 0
         self.report["suite"] = "fixed-entry-swift-controller-real-ssh"
         self.report["swiftEvents"] = self.events
+        self.report["sleepWakeCycles"] = []
         self.report["limits"].append("Sleep/wake invokes actual Controller lifecycle APIs, not physical system sleep or OS notifications.")
+        self.report["limits"].append("Blackhole sleep checks retain remote SSH listeners, use the real 20-second lease, and measure local fixture recovery rather than physical Mac wake time.")
 
     def read_events(self, strict=True):
         path = self.fixture.root / "events.jsonl"
@@ -479,8 +481,137 @@ class SwiftCheckRun(CheckRun):
         self.health_task.cancel()
         await asyncio.gather(self.health_task, return_exceptions=True)
         self.health_task = None
+        await self.retained_sleep_cases(old_port, old_owner, frozen, fixed_owners[0], entries[0]["epoch"])
         await self.lifecycle_cases()
         self.report["status"] = "passed"
+
+    async def retained_sleep_cases(self, original_port, original_owner, original_pair, fixed_owner, epoch):
+        fixture = self.fixture
+        retained = [{"port": original_port, "owner": original_owner, "pair": original_pair}]
+
+        async def listener(port, helper=False):
+            return await asyncio.to_thread(fixture_module.listener_owner, port,
+                                          None if helper else fixture.sshds[0].pid,
+                                          fixture.helpers[0].pid if helper else None)
+
+        async def check_retained(label):
+            observations = []
+            for item in retained:
+                owner = await listener(item["port"])
+                state = item["pair"].state()
+                observations.append({"port": item["port"], "owner": owner, "relay": state,
+                                     "passed": owner == item["owner"] and state["frozen"] and not state["backendEOF"]})
+            self.check(label, all(item["passed"] for item in observations), observations)
+
+        for label, long_sleep in [("short-sleep", False), ("expired-lease-sleep", True)]:
+            self.action("start", "fixed-a")
+            await self.wait(lambda: self.phases.get("fixed-a") == "connected", 20,
+                            label + ": fixed entry did not connect before sleep")
+            await self.exact_transfer(0)
+            await check_retained(label + ": earlier abandoned listeners remain before sleep")
+            before = await self.status(0)
+            old_port = before["backend_port"]
+            old_owner = await listener(old_port)
+            masters = self.master_pids(fixture.ssh_ports[0], legacy=False)
+            pairs = [pair for pair in fixture.relay.active()
+                     if not pair.state()["frozen"] and not pair.state()["frontEOF"] and not pair.state()["backendEOF"]]
+            self.check(label + ": current channel and unchanged helper have proven fixture ownership",
+                       old_owner is not None and len(masters) == 1 and len(pairs) == 1
+                       and before["epoch"] == epoch and await listener(before["port"], helper=True) == fixed_owner)
+            pair = pairs[0]
+            fixture.ports.add(old_port)
+            pair.freeze()
+            retained.append({"port": old_port, "owner": old_owner, "pair": pair})
+            marker = len(self.events)
+            sleep_start = time.monotonic()
+            self.record("stage", message=label + ": sleep starts after the active SSH channel becomes a blackhole")
+            self.action("sleep")
+            await self.wait(lambda: any(item.get("type") == "sleep" for item in self.events[marker:])
+                            and not self.master_pids() and not self.gateway_ports(), 12,
+                            label + ": blackholed release delayed owned client shutdown beyond twelve seconds")
+            closed_seconds = time.monotonic() - sleep_start
+            self.check(label + ": owned masters and gateways close within twelve seconds",
+                       closed_seconds < 12, {"observed_seconds": round(closed_seconds, 3)})
+            await self.wait(lambda: pair.state()["frontEOF"], 5, label + ": retired client EOF was not observed")
+            await check_retained(label + ": server listeners survive local sleep cleanup")
+            attempts = fixture.relay.count()
+            lease_seconds = float(before["lease_seconds"])
+            if not 0 < lease_seconds <= 25:
+                raise RuntimeError("Unexpected lease duration exceeds the bounded Swift fixture budget")
+            hold = lease_seconds + 1.25 if long_sleep else 1.0
+            await self.quiet(hold, lambda: not self.master_pids() and not self.gateway_ports()
+                             and fixture.relay.count() == attempts and self.phases.get("fixed-a") == "reconnecting",
+                             label + ": suspended controller does not reconnect before wake")
+            asleep = await self.status(0)
+            self.check(label + ": helper and fixed entry persist during sleep",
+                       asleep["epoch"] == epoch and asleep["generation"] == before["generation"]
+                       and await listener(before["port"], helper=True) == fixed_owner)
+            if long_sleep:
+                self.check(label + ": the actual active lease expires before wake",
+                           asleep["active_generation"] is None and asleep["backend_port"] is None)
+            else:
+                self.check(label + ": the active lease is still valid before short-sleep wake",
+                           asleep["active_generation"] == before["active_generation"] and asleep["backend_port"] == old_port)
+            await check_retained(label + ": old ports remain occupied immediately before wake")
+            marker = len(self.events)
+            wake_start = time.monotonic()
+            sleep_seconds = wake_start - sleep_start
+            self.action("wake"); self.action("wake")
+            await self.wait(lambda: self.phases.get("fixed-a") == "connected" and self.phases.get("legacy") == "connected"
+                            and sum(item.get("type") == "wake" for item in self.events[marker:]) == 2,
+                            20, label + ": duplicate wake did not promptly restore eligible connections")
+            connected_seconds = time.monotonic() - wake_start
+            await self.exact_transfer(0)
+            data_seconds = time.monotonic() - wake_start
+            await self.legacy_transfer()
+            after = await self.status(0)
+            new_port = after["backend_port"]
+            fixture.ports.add(new_port)
+            new_owner = await listener(new_port)
+            new_masters = self.master_pids(fixture.ssh_ports[0], legacy=False)
+            await check_retained(label + ": abandoned ports remain with the same sshd processes after recovery")
+            self.check(label + ": wake promptly switches the same fixed entry to a different owned backend",
+                       data_seconds < 20 and new_port not in {item["port"] for item in retained}
+                       and new_owner is not None and new_owner != old_owner
+                       and after["port"] == before["port"] and after["epoch"] == epoch
+                       and await listener(before["port"], helper=True) == fixed_owner
+                       and after["active_generation"] == after["generation"] > before["generation"]
+                       and len(new_masters) == 1 and new_masters != masters)
+            await self.quiet(2, lambda: fixture.relay.count() == attempts + 1
+                             and len(self.master_pids(fixture.ssh_ports[0], legacy=False)) == 1
+                             and len(self.gateway_ports()) == 1 and self.phases.get("fixed-b") == "stopped"
+                             and not self.master_pids(fixture.ssh_ports[1], legacy=False),
+                             label + ": duplicate wake creates one channel and leaves manual-only B stopped")
+            self.check(label + ": wake reports no forwarding conflict or terminal failure",
+                       not any(item.get("type") == "status" and item.get("id") == "fixed-a"
+                               and (item.get("phase") == "failed" or "端口已占用" in item.get("message", ""))
+                               for item in self.events[marker:]))
+            self.report["sleepWakeCycles"].append({
+                "label": label, "leaseSeconds": lease_seconds, "sleepHoldSeconds": hold,
+                "observedSleepSeconds": round(sleep_seconds, 3),
+                "ownedClientExitObservedSeconds": round(closed_seconds, 3),
+                "wakeToConnectedObservedSeconds": round(connected_seconds, 3),
+                "wakeToExactHTTPMarkerObservedSeconds": round(data_seconds, 3),
+                "fixedEntryPort": before["port"], "fixedEntryPID": fixed_owner["pid"],
+                "oldBackendPort": old_port, "newBackendPort": new_port,
+                "oldSSHD": old_owner, "newSSHD": new_owner,
+                "oldListenersStillOccupied": True, "helperEpochUnchanged": True,
+                "activeLeaseExpiredBeforeWake": asleep["active_generation"] is None,
+                "exactHTTPMarkerPassed": True, "manualOnlyBRemainsStopped": True,
+            })
+
+        self.action("stop", "fixed-a")
+        await self.wait(lambda: self.phases.get("fixed-a") == "stopped"
+                        and not self.master_pids(fixture.ssh_ports[0], legacy=False), 10,
+                        "Explicit stop after blackhole recovery did not close the owned master")
+        released = await self.status(0)
+        self.check("normal explicit stop after blackhole recovery releases its active lease", released["backend_port"] is None)
+        self.action("start", "fixed-b")
+        await self.wait(lambda: self.phases.get("fixed-b") == "connected"
+                        and len(self.master_pids(fixture.ssh_ports[1], legacy=False)) == 1
+                        and len(self.gateway_ports()) == 1, 20,
+                        "Manual-only B did not reconnect before the original lifecycle checks")
+        await self.exact_transfer(1)
 
     async def error_cases(self):
         for identity in ("missing-helper", "wrong-port"):
@@ -544,14 +675,32 @@ class SwiftCheckRun(CheckRun):
                          "user stop during sleep cancels native fixed-entry wake intent")
         self.action("start", "fixed-a")
         await self.wait(lambda: self.phases.get("fixed-a") == "connected", 20, "Final Swift explicit start failed")
+        entry = await self.status(0)
+        self.fixture.ports.add(entry["backend_port"])
+        owner = await asyncio.to_thread(fixture_module.listener_owner, entry["backend_port"], self.fixture.sshds[0].pid)
+        pairs = [pair for pair in self.fixture.relay.active()
+                 if not pair.state()["frozen"] and not pair.state()["frontEOF"] and not pair.state()["backendEOF"]]
+        self.check("shutdown regression owns exactly one active channel before blackholing it",
+                   owner is not None and len(pairs) == 1)
+        pair = pairs[0]
+        pair.freeze()
         marker = len(self.events)
+        shutdown_start = time.monotonic()
         self.action("sleep")
+        # Shutdown must not depend on the release completing over the now-dead channel.
+        self.action("shutdown-controller")
         await self.wait(lambda: any(item.get("type") == "sleep" for item in self.events[marker:])
                         and not self.master_pids() and not self.gateway_ports(),
                         10, "Final Swift sleep did not close transports")
-        self.action("shutdown-controller")
         await self.wait(lambda: any(item.get("type") == "shutdown-controller" for item in self.events[marker:]),
                         10, "Swift Controller shutdown did not complete")
+        shutdown_seconds = time.monotonic() - shutdown_start
+        self.check("shutdown during blackholed sleep release completes within ten seconds",
+                   shutdown_seconds < 10, {"observed_seconds": round(shutdown_seconds, 3)})
+        retained = await asyncio.to_thread(fixture_module.listener_owner, entry["backend_port"], self.fixture.sshds[0].pid)
+        self.check("bounded shutdown preserves the abandoned server-side SSH listener",
+                   retained == owner and not pair.state()["backendEOF"])
+        self.report["blackholeShutdownObservedSeconds"] = round(shutdown_seconds, 3)
         attempts = self.fixture.relay.count()
         self.action("wake"); self.action("start", "fixed-a")
         await self.quiet(2, lambda: not self.master_pids() and not self.gateway_ports() and self.fixture.relay.count() == attempts,
