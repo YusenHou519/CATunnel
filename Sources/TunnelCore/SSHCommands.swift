@@ -88,18 +88,6 @@ enum SSHCommands {
         return ipRiskCommand(port: port, payload: .assessment, url: "https://ip.net.coffee/api/iprisk/" + encoded)
     }
 
-    static func ping0AssessmentCommand(port: Int, ip: String) throws -> String {
-        guard (1...65535).contains(port), let encoded = RiskIPAddress.encodedPath(ip) else {
-            throw Ping0ProbeError(message: "Ping0 查询 IP 或代理端口无效")
-        }
-        // Fetch only the public static page: no scripts, credentials, or cross-host redirects.
-        return "curl -q --silent --show-error --noproxy '' --proxy http://127.0.0.1:\(port) " +
-        "--connect-timeout 8 --max-time 20 --max-filesize \(Ping0Probe.bodyLimit) " +
-        "--proto '=https' --user-agent 'CATunnel/0.6.0' --header 'Accept: text/html' " +
-        "--write-out '\\nTM_PING0_V1 assessment %{http_connect} %{http_code} %{ssl_verify_result} %{time_total}\\n' " +
-        "'https://ping0.cc/ip/\(encoded)'"
-    }
-
     private static func ipRiskCommand(port: Int, payload: IPRiskPayload, url: String) -> String {
         "curl -q --silent --show-error --noproxy '' --proxy http://127.0.0.1:\(port) " +
         "--connect-timeout 8 --max-time 20 --max-filesize \(IPRiskProbe.bodyLimit) " +

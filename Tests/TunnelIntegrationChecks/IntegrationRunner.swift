@@ -29,8 +29,7 @@ private enum ListenerFault: String {
 
 private enum DiagnosticFixtureFlag: String {
     case passingWebsites = "diagnostic-websites-pass"
-    case ping0Failure = "ping0-fail"
-    case ping0Delay = "ping0-delay"
+    case netCoffeeDelay = "netcoffee-delay"
 }
 
 private struct DiagnosticAudit: Decodable {
@@ -393,14 +392,13 @@ private final class IntegrationChecks {
                 try await self.waitForDiagnostics(a.id)
                 try self.require(self.statuses[a.id]?.phase == .connected, "Diagnostic failure disconnected SSH")
                 try self.require(self.statuses[a.id]?.ipRisk.state == .failed, "Expected injected Net.Coffee failure")
-                try self.require(self.statuses[a.id]?.ping0.state == .skipped, "Existing profile unexpectedly enabled Ping0")
                 try self.require(self.statuses[a.id]?.proxyCheck == .partial, "Expected partial fixture diagnostics")
-                try self.requireDiagnosticRequests(since: auditStart, port: a.remotePort, netCoffee: true, ping0: false)
+                try self.requireDiagnosticRequests(since: auditStart, port: a.remotePort, netCoffee: true)
                 try await self.transfer(a, marker: self.fixture.markers[0])
             }
             let passingWebsites = try injectDiagnosticFlag(.passingWebsites)
             defer { try? FileManager.default.removeItem(at: passingWebsites) }
-            try await check("legacy profile without Ping0 consent makes no risk-provider requests") {
+            try await check("legacy profile without retired Ping0 setting makes no risk-provider requests") {
                 guard var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(b)) as? [String: Any] else {
                     throw IntegrationFailure(description: "Unable to construct a legacy profile fixture")
                 }
@@ -413,30 +411,29 @@ private final class IntegrationChecks {
                 controller.testProxy(id: legacy.id)
                 try await self.waitForDiagnostics(legacy.id)
                 try self.requirePassedWebsites(legacy.id)
-                try self.require(self.statuses[legacy.id]?.ping0.state == .skipped
-                                 && self.statuses[legacy.id]?.ipRisk.state == .skipped,
-                                 "Disabled provider results were not skipped")
-                try self.requireDiagnosticRequests(since: auditStart, port: legacy.remotePort, netCoffee: false, ping0: false)
+                try self.require(self.statuses[legacy.id]?.ipRisk.state == .skipped,
+                                 "Disabled Net.Coffee result was not skipped")
+                try self.requireDiagnosticRequests(since: auditStart, port: legacy.remotePort, netCoffee: false)
                 try await self.transfer(a, marker: self.fixture.markers[0])
                 try await self.transfer(legacy, marker: self.fixture.markers[1])
             }
-            try await check("Ping0-only consent parses a controlled page without requesting Net.Coffee") {
-                var ping0Only = a
-                ping0Only.assessIPRisk = false
-                ping0Only.assessPing0 = true
-                try await self.restart(ping0Only, using: controller)
+            try await check("retired Ping0=true setting never requests Ping0 or Net.Coffee") {
+                var retired = a
+                retired.assessIPRisk = false
+                retired.assessPing0 = true
+                try await self.restart(retired, using: controller)
                 let auditStart = try self.diagnosticAudit().count
-                controller.testProxy(id: ping0Only.id)
-                try await self.waitForDiagnostics(ping0Only.id)
-                try self.requirePassedWebsites(ping0Only.id)
-                try self.requirePing0Assessment(ping0Only.id)
-                try self.require(self.statuses[ping0Only.id]?.ipRisk.state == .skipped,
-                                 "Ping0 consent unexpectedly enabled Net.Coffee")
-                try self.requireDiagnosticRequests(since: auditStart, port: ping0Only.remotePort, netCoffee: false, ping0: true)
-                try await self.transfer(ping0Only, marker: self.fixture.markers[0])
+                controller.testProxy(id: retired.id)
+                try await self.waitForDiagnostics(retired.id)
+                try self.requirePassedWebsites(retired.id)
+                try self.require(self.statuses[retired.id]?.ipRisk.state == .skipped,
+                                 "Retired Ping0 setting unexpectedly enabled Net.Coffee")
+                try self.requireDiagnosticRequests(since: auditStart, port: retired.remotePort, netCoffee: false)
+                try self.require(retired.assessPing0, "Diagnostics rewrote the retired setting")
+                try await self.transfer(retired, marker: self.fixture.markers[0])
                 try await self.transfer(b, marker: self.fixture.markers[1])
             }
-            try await check("both risk providers share one exit trace and retain independent results") {
+            try await check("Net.Coffee remains independent while retired Ping0=true produces no Ping0 request") {
                 var both = a
                 both.assessPing0 = true
                 try await self.restart(both, using: controller)
@@ -444,37 +441,34 @@ private final class IntegrationChecks {
                 controller.testProxy(id: both.id)
                 try await self.waitForDiagnostics(both.id)
                 try self.requirePassedWebsites(both.id)
-                try self.requirePing0Assessment(both.id)
                 try self.require(self.statuses[both.id]?.ipRisk.state == .failed,
                                  "Controlled Net.Coffee failure was not retained independently")
-                try self.requireDiagnosticRequests(since: auditStart, port: both.remotePort, netCoffee: true, ping0: true)
+                try self.requireDiagnosticRequests(since: auditStart, port: both.remotePort, netCoffee: true)
                 try await self.transfer(both, marker: self.fixture.markers[0])
             }
-            try await check("Ping0 request failure preserves the four-site aggregate and actual forwarding") {
-                var ping0Only = a
-                ping0Only.assessIPRisk = false
-                ping0Only.assessPing0 = true
-                try await self.restart(ping0Only, using: controller)
-                let failure = try self.injectDiagnosticFlag(.ping0Failure)
-                defer { try? FileManager.default.removeItem(at: failure) }
-                let auditStart = try self.diagnosticAudit().count
-                controller.testProxy(id: ping0Only.id)
-                try await self.waitForDiagnostics(ping0Only.id)
-                try self.requirePassedWebsites(ping0Only.id)
-                try self.require(self.statuses[ping0Only.id]?.ping0.state == .failed
-                                 && self.statuses[ping0Only.id]?.ping0.assessment == nil,
-                                 "Failed Ping0 response exposed an assessment")
-                try self.requireDiagnosticRequests(since: auditStart, port: ping0Only.remotePort, netCoffee: false, ping0: true)
-                try await self.transfer(ping0Only, marker: self.fixture.markers[0])
+            try await check("repeated manual checks with retired Ping0=false never request Ping0") {
+                var retired = a
+                retired.assessIPRisk = false
+                retired.assessPing0 = false
+                try await self.restart(retired, using: controller)
+                for _ in 0..<2 {
+                    let auditStart = try self.diagnosticAudit().count
+                    controller.testProxy(id: retired.id)
+                    try await self.waitForDiagnostics(retired.id)
+                    try self.requirePassedWebsites(retired.id)
+                    try self.requireDiagnosticRequests(since: auditStart, port: retired.remotePort, netCoffee: false)
+                }
+                try self.require(!retired.assessPing0, "Diagnostics rewrote the retired setting")
+                try await self.transfer(retired, marker: self.fixture.markers[0])
                 try await self.transfer(b, marker: self.fixture.markers[1])
             }
-            try await check("stopping delayed Ping0 cancels its result before restarting the same server ID") {
+            try await check("stopping delayed Net.Coffee cancels its result before restarting the same server ID") {
                 var delayed = a
-                delayed.assessIPRisk = false
+                delayed.assessIPRisk = true
                 delayed.assessPing0 = true
                 try await self.restart(delayed, using: controller)
-                let delay = try self.injectDiagnosticFlag(.ping0Delay)
-                let started = URL(fileURLWithPath: self.fixture.root).appendingPathComponent("ping0-delay-started")
+                let delay = try self.injectDiagnosticFlag(.netCoffeeDelay)
+                let started = URL(fileURLWithPath: self.fixture.root).appendingPathComponent("netcoffee-delay-started")
                 let observer = controller.onEvent
                 defer {
                     controller.onEvent = observer
@@ -492,14 +486,14 @@ private final class IntegrationChecks {
                 }
                 let completedSites = self.statuses[delayed.id]?.websiteResults ?? []
                 try self.require(FileManager.default.fileExists(atPath: started.path)
-                                 && self.statuses[delayed.id]?.ping0.state == .checking
+                                 && self.statuses[delayed.id]?.ipRisk.state == .checking
                                  && completedSites.count == 4 && completedSites.allSatisfy { $0.state == .passed },
-                                 "Ping0 did not remain in flight before cancellation")
-                try self.requireDiagnosticRequests(since: auditStart, port: delayed.remotePort, netCoffee: false, ping0: true)
+                                 "Net.Coffee did not remain in flight before cancellation")
+                try self.requireDiagnosticRequests(since: auditStart, port: delayed.remotePort, netCoffee: true)
                 var sawStaleAssessment = false
                 controller.onEvent = { event in
                     observer?(event)
-                    if case let .status(id, status) = event, id == delayed.id, status.ping0.assessment != nil {
+                    if case let .status(id, status) = event, id == delayed.id, status.ipRisk.state == .failed {
                         sawStaleAssessment = true
                     }
                 }
@@ -512,13 +506,12 @@ private final class IntegrationChecks {
                 controller.testProxy(id: replacement.id)
                 try await self.waitForDiagnostics(replacement.id)
                 try self.requirePassedWebsites(replacement.id)
-                try self.requireDiagnosticRequests(since: replacementAuditStart, port: replacement.remotePort,
-                                                  netCoffee: false, ping0: false)
+                try self.requireDiagnosticRequests(since: replacementAuditStart, port: replacement.remotePort, netCoffee: false)
                 let replacementStatus = self.statuses[replacement.id]
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 try self.require(!sawStaleAssessment && self.statuses[replacement.id] == replacementStatus
-                                 && replacementStatus?.ping0.state == .skipped,
-                                 "Cancelled Ping0 result modified the replacement session")
+                                 && replacementStatus?.ipRisk.state == .skipped,
+                                 "Cancelled Net.Coffee result modified the replacement session")
                 try await self.transfer(replacement, marker: self.fixture.markers[0])
                 try await self.transfer(b, marker: self.fixture.markers[1])
             }
@@ -959,16 +952,15 @@ private final class IntegrationChecks {
         }
     }
 
-    private func requireDiagnosticRequests(since offset: Int, port: Int, netCoffee: Bool, ping0: Bool) throws {
+    private func requireDiagnosticRequests(since offset: Int, port: Int, netCoffee: Bool) throws {
         let entries = Array(try diagnosticAudit().dropFirst(offset))
         var expected = ["https://api.openai.com/v1/models": 1,
                         "https://api.anthropic.com/v1/models": 1,
                         "https://www.google.com/generate_204": 1,
                         "https://claude.ai/cdn-cgi/trace": 1]
         if netCoffee { expected["https://ip.net.coffee/api/iprisk/192.0.2.1"] = 1 }
-        if ping0 { expected["https://ping0.cc/ip/192.0.2.1"] = 1 }
         let actual = Dictionary(grouping: entries, by: \.url).mapValues { $0.count }
-        try require(actual == expected, "Diagnostic requests did not match independent provider consent: \(actual)")
+        try require(actual == expected, "Diagnostic requests changed or included a removed Ping0 request: \(actual)")
         try require(entries.allSatisfy { !$0.executedPublicRequest && $0.proxyPort == port },
                     "Diagnostic request escaped the controlled fixture proxy")
     }
@@ -987,14 +979,6 @@ private final class IntegrationChecks {
         try require(statuses[id]?.phase == .connected && statuses[id]?.proxyCheck == .passed
                     && websites.count == 4 && websites.allSatisfy { $0.state == .passed },
                     "Risk-provider result changed the four-site aggregate or SSH state")
-    }
-
-    private func requirePing0Assessment(_ id: String) throws {
-        let result = statuses[id]?.ping0
-        try require(result?.state == .available && result?.assessment?.ip == "192.0.2.1"
-                    && result?.assessment?.ipType == "家庭宽带 IP" && result?.assessment?.riskValue == 23
-                    && result?.assessment?.sharedUsers == "1 - 10 (极好)",
-                    "Ping0 did not parse the controlled IP, type, risk, and shared-user fields")
     }
 
     private func restart(_ profile: ServerProfile, using controller: TunnelController) async throws {

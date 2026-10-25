@@ -29,8 +29,43 @@ def audit(root, **record):
 
 def forced_command(root, index):
     manifest = json.loads((root / "fixture.json").read_text())
+    original = os.environ.get("SSH_ORIGINAL_COMMAND", "")
+    allowlist = root / "inspection-commands.json"
+    entries = json.loads(allowlist.read_text()) if allowlist.exists() else []
+    for entry in entries:
+        if index != 0 or original != entry["command"]:
+            continue
+        kind = entry["kind"]
+        if kind not in ("environment", "status", "listener", "discovery"):
+            return 126
+        request = sys.stdin.buffer.readline(4097) if kind == "status" else b""
+        if kind == "status":
+            try:
+                if json.loads(request) != {"op": "status"} or len(request) > 4096:
+                    return 126
+            except ValueError:
+                return 126
+        # The Swift runner supplies complete production commands in its private directory.
+        # Only exact matches run; never permit an arbitrary shell or interpreter command.
+        environment = dict(os.environ, HOME=manifest["fixtureHome"],
+                           PATH=str(Path(manifest["fixtureHome"]) / "bin") + ":/usr/bin:/bin",
+                           PYTHONDONTWRITEBYTECODE="1")
+        result = subprocess.run(["/bin/sh", "-c", original], input=request,
+                                capture_output=True, env=environment, timeout=30)
+        audit(root, kind="readonly-" + kind, port=entry["port"], exitCode=result.returncode,
+              injected=False, injectedCandidates=([dict(path=manifest["injectedOldPythonPath"], version="3.8.20")]
+                                                   if kind == "discovery" else []))
+        delay = root / ("delay-inspection-" + kind)
+        if delay.exists():
+            (root / ("inspection-" + kind + "-before-reply")).touch(exist_ok=True)
+            deadline = time.monotonic() + 10
+            while delay.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+        sys.stdout.buffer.write(result.stdout)
+        sys.stderr.buffer.write(result.stderr)
+        return result.returncode
     try:
-        arguments = shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
+        arguments = shlex.split(original)
     except ValueError:
         return 126
     script = Path(manifest["installerScriptPath"]).read_text()
@@ -117,7 +152,22 @@ class InstallFixture(fixture_module.SSHFixture):
         self.python_directory.mkdir(mode=0o700)
         self.selected_python = self.python_directory / "python 'selected 3"
         self.selected_python.symlink_to(sys.executable)
+        (self.python_directory / "python3").symlink_to(sys.executable)
         self.missing_python = self.python_directory / "python missing"
+        self.conda_environment = home / "existing conda 'environment"
+        (self.conda_environment / "bin").mkdir(parents=True, mode=0o700)
+        self.conda_python = self.conda_environment / "bin/python3"
+        self.conda_python.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n')
+        self.conda_python.chmod(0o700)
+        conda = home / ".conda"
+        conda.mkdir(mode=0o700)
+        (conda / "environments.txt").write_text(str(self.conda_environment) + "\n" + str(home / "absent environment") + "\n")
+        self.injected_old_python = home / "miniconda3/bin/python3"
+        self.injected_old_python.parent.mkdir(parents=True, mode=0o700)
+        # This labelled candidate is deliberately synthetic; other candidates execute
+        # the actual local Python. The production version probe must classify it as old.
+        self.injected_old_python.write_text("#!/bin/sh\nprintf '[3,8,20]\\n'\n")
+        self.injected_old_python.chmod(0o700)
         self.runtime_executables = {sys.executable, str(Path(sys.executable).resolve()), str(self.selected_python)}
         self.install_reservations = [fixture_module.ssh_fixture.reserved_socket() for _ in range(5)]
         self.install_ports = [item.getsockname()[1] for item in self.install_reservations]
@@ -131,7 +181,8 @@ class InstallFixture(fixture_module.SSHFixture):
             manifest = json.loads(path.read_text())
             manifest.update(installPorts=self.install_ports, installerScriptPath=str(REPOSITORY / "experimental/fixed_entry/install.py"),
                             helperPath=str(self.helper_path), fixtureHome=str(self.install_home),
-                            selectedPythonPath=str(self.selected_python), missingPythonPath=str(self.missing_python))
+                            selectedPythonPath=str(self.selected_python), missingPythonPath=str(self.missing_python),
+                            condaPythonPath=str(self.conda_python), injectedOldPythonPath=str(self.injected_old_python))
             path.write_text(json.dumps(manifest))
             index = len(self.sshds)
             config = Path(arguments[-1])
@@ -179,7 +230,8 @@ class InstallFixture(fixture_module.SSHFixture):
 def run(binary, output):
     report = {"suite": "fixed-entry-install-real-ssh", "status": "failed", "checks": [],
               "limits": ["Temporary macOS SSH servers and private fixture HOME only; no real server deployment.",
-                         "Old default Python is a labelled injected failure; selected Python executes the real local interpreter through a private symlink.",
+                         "Old default Python and the miniconda3 candidate are labelled injected failures; selected/Conda candidates execute the real local interpreter through a private symlink/wrapper.",
+                         "Inspection commands require exact production-command matches in a private allowlist; HOME is private and PATH is limited to fixture bin and system utilities.",
                          "No Linux, physical sleep, system service, or public egress validation."]}
     started = time.monotonic()
     root = home = None

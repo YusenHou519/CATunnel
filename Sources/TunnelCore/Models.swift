@@ -12,6 +12,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var keepRetryingForwardingFailure: Bool
     public var identityFile: String?
     public var assessIPRisk: Bool
+    // Retained for profile round-tripping; Ping0 now opens only on an explicit browser action.
     public var assessPing0: Bool
     public var autoConnectOnLaunch: Bool
     public var useFixedEntry: Bool
@@ -226,18 +227,16 @@ public struct TunnelStatus: Equatable, Sendable {
     public var connectedAt: Date?
     public var websiteResults: [WebsiteCheckResult]
     public var ipRisk: IPRiskCheckResult
-    public var ping0: Ping0CheckResult
 
     public init(phase: TunnelPhase = .stopped, message: String = "未开启",
                 proxyCheck: ProxyCheckState = .unchecked, proxyMessage: String = "尚未测试代理出口",
                 connectedAt: Date? = nil,
                 websiteResults: [WebsiteCheckResult] = WebsiteTarget.allCases.map { .init(target: $0) },
-                ipRisk: IPRiskCheckResult = .init(), ping0: Ping0CheckResult = .init()) {
+                ipRisk: IPRiskCheckResult = .init()) {
         self.phase = phase; self.message = message; self.proxyCheck = proxyCheck
         self.proxyMessage = proxyMessage; self.connectedAt = connectedAt
         self.websiteResults = websiteResults
         self.ipRisk = ipRisk
-        self.ping0 = ping0
     }
     public static let stopped = TunnelStatus()
 }

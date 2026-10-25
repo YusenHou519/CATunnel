@@ -16,8 +16,8 @@ use your Mac's local proxy through an SSH tunnel.
 - **Multiple servers:** add, edit, remove, and switch profiles from the top tabs.
 - **Tunnel controls:** independent connection states, reconnection after interruptions, and per-server startup preferences.
 - **Recovery options (current source):** close owned SSH processes before sleep and resume eligible connections on wake; optional forwarding retries every 60 seconds, off by default.
-- **Fixed entry (current source, experimental):** an optional remote relay keeps the entry port open, with in-app installation and a choice of an existing server-side Python interpreter.
-- **Network checks:** OpenAI API, Claude, and Google reachability, plus optional Net.Coffee assessments and Ping0 IP type, risk, and shared-user estimates.
+- **Fixed entry (current source, experimental):** an optional remote relay keeps the entry port open, with in-app installation, discovery and selection of existing Python interpreters, and an explicit read-only status check.
+- **Network checks:** OpenAI API, Claude, and Google reachability with optional Net.Coffee assessments; a Ping0 button opens its website in the default browser.
 - **Native menu-bar UI:** launch at login, adjustable panel width and font size, and a first-use guide.
 
 CATunnel requires an existing HTTP/mixed proxy. Starting a tunnel does not configure remote tools to use it.
@@ -65,7 +65,9 @@ for configuration, verification commands, and troubleshooting.
 
 SSH aliases, ProxyJump, interactive passwords, and IPv6 host addresses are not yet supported.
 API reachability does not prove account or model access. IP scores are optional, off by default, and for reference only.
-Ping0 lookup is in the current source, not the preview download above. It reads a public webpage and reports an error if the page changes or access is restricted.
+The Ping0 button is in the current source, not the preview download above. Clicking it opens the observed exit IP's page
+in the default browser; historical IPs are labeled, and the homepage opens when no usable IP is available.
+The app no longer queries or parses Ping0. The browser uses the Mac's own network settings.
 
 ## Experimental fixed entry
 
@@ -79,10 +81,11 @@ switching the forwarding target. An old SSH session can retain its temporary por
 to be terminated before reconnection.
 
 1. Stop the server connection you want to edit, open its settings, and check the remote proxy port (`服务器代理端口`).
-2. The server must already have **Python 3.9+**. Enter its executable's absolute path in
-   **Remote Python path (optional)** (`远端 Python 路径（可选）`), such as `/opt/tools/bin/python3`.
-   Leave it empty to use the server's default `python3`. This must be a path on the server;
-   `~/` expansion and commands such as `conda activate` are not supported. The field is available with fixed entry off.
+2. The server must already have **Python 3.9+**. Click **Find available Python** (`查找可用 Python`),
+   review paths, versions, and compatibility, then click **Use this Python** (`使用此 Python`). Selection only fills the form.
+   You can also enter an absolute server-side path, such as `/opt/tools/bin/python3`, in **Remote Python path (optional)**.
+   Leave it empty to use the server's default `python3`; `~/` expansion and commands such as `conda activate` are not supported.
+   Discovery and manual entry work with fixed entry off. Discovery has scope and timeout limits and never installs or upgrades Python.
 3. Click **Install and enable** (`安装并启用`). Over SSH, the app installs the relay under the current account's
    `~/.catunnel/fixed-entry/<port>/`, starts it, then uses a separate SSH request to verify that it stays running.
    You do not need to turn on the fixed-entry toggle beforehand.
@@ -94,6 +97,12 @@ The app does not upgrade system Python, download dependencies, use sudo, or modi
 Cancelling installation stops only the local wait; the remote operation may have completed. Clicking again checks
 for and reuses a compatible idle installation. An occupied port, active entry, or unrecognized installation files
 are preserved and reported as errors.
+
+After saving a profile with fixed entry enabled, the panel and connection details offer **Check fixed entry** (`检查固定入口`).
+It checks the local proxy port, SSH, remote Python, helper, entry port, and active backend, including while connected.
+It uses an independent SSH session and does not install, reconnect, or change settings. Results have a check time and distinguish
+passed, warning, failed, and skipped items; a listening port does not prove Internet access. Closing the panel or switching servers
+cancels the check without stopping the tunnel.
 
 Installation does not configure server boot startup. After a clean server restart, use the button again to start
 the existing installation. The relay cannot provide Internet access while the Mac is asleep, and existing TCP

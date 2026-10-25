@@ -139,7 +139,6 @@ final class TunnelStore: ObservableObject {
         current.proxyMessage = "历史检测 · " + completed.status.proxyMessage
         current.websiteResults = completed.status.websiteResults
         current.ipRisk = completed.status.ipRisk
-        current.ping0 = completed.status.ping0
         return current
     }
 
@@ -304,13 +303,12 @@ final class TunnelStore: ObservableObject {
         guard let profile = profiles.first(where: { $0.id == id }) else { return }
         let terminalRiskStates: [IPRiskCheckState] = [.available, .failed, .skipped]
         let netCoffeeFinished = !profile.assessIPRisk || terminalRiskStates.contains(status.ipRisk.state)
-        let ping0Finished = !profile.assessPing0 || terminalRiskStates.contains(status.ping0.state)
         if [.passed, .partial, .failed].contains(status.proxyCheck),
            status.websiteResults.count == WebsiteTarget.allCases.count,
            status.websiteResults.allSatisfy({ [.passed, .restricted, .failed].contains($0.state) }),
-           netCoffeeFinished, ping0Finished {
+           netCoffeeFinished {
             let dates = status.websiteResults.compactMap(\.checkedAt)
-                + [status.ipRisk.checkedAt, status.ping0.checkedAt].compactMap { $0 }
+                + [status.ipRisk.checkedAt].compactMap { $0 }
             completedChecks[id] = CompletedCheck(status: status, completedAt: dates.max() ?? Date())
         }
         statuses[id] = status
@@ -367,9 +365,6 @@ final class TunnelStore: ObservableObject {
         current.ipRisk = profile.assessIPRisk
             ? .init(state: .checking, message: "演示：正在模拟出口评分…", stage: .exitIP)
             : .skipped()
-        current.ping0 = profile.assessPing0
-            ? .init(state: .checking, message: "演示：正在模拟 Ping0 查询…")
-            : .skipped()
         receiveStatus(id, current)
         let connectedAt = current.connectedAt
         demoTasks[id] = Task { [weak self] in
@@ -416,11 +411,7 @@ final class TunnelStore: ObservableObject {
             ipRisk: profile.assessIPRisk
                 ? .init(state: .available, message: "演示：信任分 89 · 纯净", stage: .riskAssessment,
                         assessment: assessment, ip: ip, countryCode: "US", checkedAt: checkedAt)
-                : .skipped(ip: ip, countryCode: "US", checkedAt: checkedAt),
-            ping0: profile.assessPing0
-                ? .init(state: .available, message: "演示：Ping0 IP 信息", assessment: .init(ip: ip,
-                        ipType: "机房 IP", riskValue: 12, sharedUsers: "1 - 10 (极好)"), ip: ip, checkedAt: checkedAt)
-                : .skipped(ip: ip, checkedAt: checkedAt))
+                : .skipped(ip: ip, countryCode: "US", checkedAt: checkedAt))
     }
 
     private func appendLog(_ id: String, _ message: String) {

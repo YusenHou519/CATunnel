@@ -36,18 +36,6 @@ def record_diagnostic(root, category, url, proxy_port):
                                 "executed_public_request": False}) + "\n")
 
 
-def ping0_fixture_html():
-    # Minimal controlled response, not a copy of the public page or executable script.
-    return """<!doctype html><html><head><title>192.0.2.1-IP查询</title></head><body>
-<div class="info asninfo"><div class="content">
-<div class="line ip"><div class="content"><a href="https://ping0.cc/trace/192.0.2.1">trace</a></div></div>
-<div class="line line-iptype"><div class="content"><span class="label orange">家庭宽带 IP</span></div></div>
-<div class="line line-risk"><div class="content"><div class="riskbar"><div class="riskitem riskcurrent">
-<span class="value">23%</span><span class="lab">低风险</span></div></div></div></div>
-<div class="line line-usecount"><div class="content"><div class="usecountbar" usecount="1 - 10 (极好)">1 - 10 (极好)</div></div></div>
-</div></div></body></html>"""
-
-
 def force_command(root):
     """The fixture SSH server cannot execute arbitrary remote commands."""
     fixture = json.loads((root / "fixture.json").read_text())
@@ -104,24 +92,21 @@ def force_command(root):
             print("ip=192.0.2.1\nloc=US\n\nTM_IPRISK_V1 trace 200 200 0 0.001")
             category = "synthetic-claude-trace"
         elif url == "https://ip.net.coffee/api/iprisk/192.0.2.1":
-            print('{"error":"fixture service unavailable"}\n\nTM_IPRISK_V1 assessment 200 503 0 0.001')
-            category = "netcoffee-fault-injection"
-        elif url == "https://ping0.cc/ip/192.0.2.1":
-            if (root / "ping0-fail").exists():
-                record_diagnostic(root, "ping0-fault-injection", url, proxy_port)
-                print("Fixture Ping0 unavailable\n\nTM_PING0_V1 assessment 200 503 0 0.001")
-                return 0
-            delayed = root / "ping0-delay"
+            delayed = root / "netcoffee-delay"
             if delayed.exists():
-                record_diagnostic(root, "ping0-delayed", url, proxy_port)
-                (root / "ping0-delay-started").touch(exist_ok=False)
+                record_diagnostic(root, "netcoffee-delayed", url, proxy_port)
+                (root / "netcoffee-delay-started").touch(exist_ok=False)
                 deadline = time.monotonic() + 8
                 while delayed.exists() and time.monotonic() < deadline:
                     time.sleep(0.05)
-            else:
-                record_diagnostic(root, "ping0-success", url, proxy_port)
-            print(ping0_fixture_html() + "\n\nTM_PING0_V1 assessment 200 200 0 0.001")
-            return 0
+                print('{"error":"fixture service unavailable"}\n\nTM_IPRISK_V1 assessment 200 503 0 0.001')
+                return 0
+            print('{"error":"fixture service unavailable"}\n\nTM_IPRISK_V1 assessment 200 503 0 0.001')
+            category = "netcoffee-fault-injection"
+        elif url.startswith("https://ping0.cc/"):
+            record_diagnostic(root, "removed-ping0-request", url, proxy_port)
+            print("Fixture rejected a removed Ping0 request", file=sys.stderr)
+            return 126
         else:
             print("Fixture refused an unlisted diagnostic command", file=sys.stderr)
             return 126
@@ -317,7 +302,7 @@ def main():
                 allowed_urls = {
                     "https://api.openai.com/v1/models", "https://api.anthropic.com/v1/models",
                     "https://www.google.com/generate_204", "https://claude.ai/cdn-cgi/trace",
-                    "https://ip.net.coffee/api/iprisk/192.0.2.1", "https://ping0.cc/ip/192.0.2.1",
+                    "https://ip.net.coffee/api/iprisk/192.0.2.1",
                 }
                 expected_audit = bool(audit) and all(
                     not entry["executed_public_request"] and entry["url"] in allowed_urls

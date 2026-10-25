@@ -8,6 +8,7 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var setupModel: SetupCheckModel?
     private var installModel: FixedEntryInstallModel?
+    private var pythonModel: RemotePythonDiscoveryModel?
 
     func show(profile: ServerProfile, isNew: Bool, store: TunnelStore) {
         if let window {
@@ -18,10 +19,12 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
         guard store.configurationError == nil, isNew || store.canModify(profile.id) else { return }
         let setupModel = SetupCheckModel()
         let installModel = FixedEntryInstallModel()
+        let pythonModel = RemotePythonDiscoveryModel()
         self.setupModel = setupModel
         self.installModel = installModel
+        self.pythonModel = pythonModel
         let editor = ProfileEditor(profile: profile, isNew: isNew, store: store, setupModel: setupModel,
-                                   installModel: installModel) { [weak self] in
+                                   installModel: installModel, pythonModel: pythonModel) { [weak self] in
             self?.window?.close()
         }
         let hosting = NSHostingView(rootView: editor)
@@ -43,6 +46,8 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
         setupModel = nil
         installModel?.cancel()
         installModel = nil
+        pythonModel?.cancel()
+        pythonModel = nil
         closing.contentView = nil
         window = nil
     }
@@ -67,7 +72,6 @@ struct ProfileEditor: View {
     @State private var didEditAutoConnectOnLaunch = false
     @State private var identityFile: String?
     @State private var assessIPRisk: Bool
-    @State private var assessPing0: Bool
     @State private var useFixedEntry: Bool
     @State private var fixedEntryHelperPath: String
     @State private var fixedEntryRuntimePath: String
@@ -77,10 +81,12 @@ struct ProfileEditor: View {
     @State private var installedInputs: [String]?
     @StateObject private var setup: SetupCheckModel
     @StateObject private var installation: FixedEntryInstallModel
+    @StateObject private var pythonDiscovery: RemotePythonDiscoveryModel
     @FocusState private var focusedField: String?
 
     init(profile: ServerProfile, isNew: Bool, store: TunnelStore,
          setupModel: SetupCheckModel? = nil, installModel: FixedEntryInstallModel? = nil,
+         pythonModel: RemotePythonDiscoveryModel? = nil,
          onClose: @escaping () -> Void = {}) {
         self.profile = profile
         self.isNew = isNew
@@ -97,13 +103,13 @@ struct ProfileEditor: View {
         _autoConnectOnLaunch = State(initialValue: profile.autoConnectOnLaunch)
         _identityFile = State(initialValue: profile.identityFile)
         _assessIPRisk = State(initialValue: profile.assessIPRisk)
-        _assessPing0 = State(initialValue: profile.assessPing0)
         _useFixedEntry = State(initialValue: profile.useFixedEntry)
         _fixedEntryHelperPath = State(initialValue: profile.fixedEntryHelperPath ?? "")
         _fixedEntryRuntimePath = State(initialValue: profile.fixedEntryRuntimePath ?? "")
         _fixedEntryPythonPath = State(initialValue: profile.fixedEntryPythonPath ?? "")
         _setup = StateObject(wrappedValue: setupModel ?? SetupCheckModel())
         _installation = StateObject(wrappedValue: installModel ?? FixedEntryInstallModel())
+        _pythonDiscovery = StateObject(wrappedValue: pythonModel ?? RemotePythonDiscoveryModel())
     }
 
     private var blockedReason: String? {
@@ -120,13 +126,25 @@ struct ProfileEditor: View {
     private var inputs: [String] {
         [name, host, user, sshPort, remotePort, localPort, identityFile ?? "",
          String(autoReconnect), String(keepRetryingForwardingFailure), String(autoConnectOnLaunch),
-         String(assessIPRisk), String(assessPing0), String(useFixedEntry),
+         String(assessIPRisk), String(useFixedEntry),
          fixedEntryHelperPath, fixedEntryRuntimePath, fixedEntryPythonPath]
     }
 
     private var installationBlockedReason: String? {
-        FixedEntryInstallModel.blockedReason(editorReason: blockedReason,
+        if pythonDiscovery.isSearching { return "请先结束 Python 查找，再安装固定入口。" }
+        return FixedEntryInstallModel.blockedReason(editorReason: blockedReason,
             phase: isNew ? nil : store.status(for: profile.id).phase, checking: setup.isChecking)
+    }
+
+    private var discoveryBlockedReason: String? {
+        if let blockedReason { return blockedReason }
+        if installation.isInstalling { return "请先结束安装，再查找 Python。" }
+        if setup.isChecking { return "请先结束连接准备检查，再查找 Python。" }
+        return nil
+    }
+
+    private var remoteOperationInProgress: Bool {
+        installation.isInstalling || pythonDiscovery.isSearching
     }
 
     var body: some View {
@@ -153,15 +171,15 @@ struct ProfileEditor: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         addressFields
-                            .disabled(installation.isInstalling)
+                            .disabled(remoteOperationInProgress)
                         Divider()
                         identityFields
-                            .disabled(installation.isInstalling)
+                            .disabled(remoteOperationInProgress)
                         Divider()
                         proxyFields
                         Divider()
                         setupFields
-                            .disabled(installation.isInstalling)
+                            .disabled(remoteOperationInProgress)
                             .id("setup-section")
                     }
                     .padding(.horizontal, 4)
@@ -215,7 +233,7 @@ struct ProfileEditor: View {
                         .captureLayoutEvidence("profile-cancel-setup")
                 } else {
                     Button("检查连接准备", action: checkSetup)
-                        .disabled(blockedReason != nil || installation.isInstalling)
+                        .disabled(blockedReason != nil || remoteOperationInProgress)
                         .accessibilityIdentifier("profile-check-setup")
                         .captureLayoutEvidence("profile-check-setup")
                 }
@@ -226,7 +244,7 @@ struct ProfileEditor: View {
                 Button(isNew ? "添加服务器" : "保存") { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(blockedReason != nil || installation.isInstalling)
+                    .disabled(blockedReason != nil || remoteOperationInProgress)
                     .accessibilityIdentifier("save-profile")
                     .captureLayoutEvidence("save-profile")
             }
@@ -243,6 +261,7 @@ struct ProfileEditor: View {
         .onChange(of: inputs) { current in
             setup.cancel()
             if current != installedInputs { installation.cancel(clearState: true) }
+            pythonDiscovery.cancel(clearResults: true)
             errorMessage = nil
             copiedCommand = false
         }
@@ -250,14 +269,19 @@ struct ProfileEditor: View {
             if reason != nil {
                 setup.cancel()
                 installation.cancel()
+                pythonDiscovery.cancel()
             }
         }
         .onChange(of: installationBlockedReason) { reason in
             if reason != nil { installation.cancel() }
         }
+        .onChange(of: discoveryBlockedReason) { reason in
+            if reason != nil { pythonDiscovery.cancel() }
+        }
         .onDisappear {
             setup.cancel()
             installation.cancel()
+            pythonDiscovery.cancel()
         }
     }
 
@@ -324,12 +348,14 @@ struct ProfileEditor: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .disabled(installation.isInstalling)
+            .disabled(remoteOperationInProgress)
             FixedEntryOptions(isOn: $useFixedEntry, helperPath: $fixedEntryHelperPath,
                               runtimePath: $fixedEntryRuntimePath, pythonPath: $fixedEntryPythonPath,
                               installState: installation.state,
                               installBlockedReason: installationBlockedReason, demoMode: store.demoMode,
-                              onInstall: installFixedEntry, onCancelInstall: { installation.cancel() })
+                              onInstall: installFixedEntry, onCancelInstall: { installation.cancel() },
+                              discoveryModel: pythonDiscovery, discoveryBlockedReason: discoveryBlockedReason,
+                              onDiscoverPython: discoverPython, onChoosePython: { fixedEntryPythonPath = $0 })
                 .disabled(blockedReason != nil)
                 .id("fixed-entry-section")
             VStack(alignment: .leading, spacing: 5) {
@@ -348,7 +374,7 @@ struct ProfileEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(installation.isInstalling)
+            .disabled(remoteOperationInProgress)
             VStack(alignment: .leading, spacing: 5) {
                 Toggle("意外断开后自动重连", isOn: $autoReconnect)
                     .font(.system(size: 12))
@@ -359,10 +385,10 @@ struct ProfileEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(installation.isInstalling)
+            .disabled(remoteOperationInProgress)
             if !useFixedEntry {
                 ForwardingRetryOption(isOn: $keepRetryingForwardingFailure, autoReconnect: autoReconnect)
-                    .disabled(installation.isInstalling)
+                    .disabled(remoteOperationInProgress)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Toggle("启用 Net.Coffee 出口 IP 评分", isOn: $assessIPRisk)
@@ -374,18 +400,7 @@ struct ProfileEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .disabled(installation.isInstalling)
-            VStack(alignment: .leading, spacing: 5) {
-                Toggle("启用 Ping0 IP 信息查询", isOn: $assessPing0)
-                    .font(.system(size: 12))
-                    .accessibilityIdentifier("profile-assess-ping0")
-                    .captureLayoutEvidence("profile-assess-ping0")
-                Text("可选，默认关闭。手动检测时向 Ping0 公开查询页发送出口 IP，获取类型、风控值和估算共享人数。网页可能变化，结果仅供参考。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .disabled(installation.isInstalling)
+            .disabled(remoteOperationInProgress)
         }
     }
 
@@ -400,7 +415,7 @@ struct ProfileEditor: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if useFixedEntry {
-                Text("连接准备检查不确认转接程序是否已运行；开启连接时才验证固定入口和后端。")
+                Text("连接准备检查只检查基础依赖；可在服务器面板点击“检查固定入口”查看转接程序和后端状态。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -473,7 +488,7 @@ struct ProfileEditor: View {
         }
     }
 
-    private func editedProfile(forInstallation: Bool = false) throws -> ServerProfile {
+    private func editedProfile(forInstallation: Bool = false, forPythonDiscovery: Bool = false) throws -> ServerProfile {
         let trim: (String) -> String = { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let sshPortValue = Int(trim(sshPort)),
               let remotePortValue = Int(trim(remotePort)),
@@ -487,14 +502,24 @@ struct ProfileEditor: View {
         let edited = ServerProfile(id: profile.id, name: trim(name), host: trim(host), user: trim(user),
                                    sshPort: sshPortValue, remotePort: remotePortValue, localPort: localPortValue,
                                    autoReconnect: autoReconnect, identityFile: identityFile, assessIPRisk: assessIPRisk,
-                                   assessPing0: assessPing0, autoConnectOnLaunch: autoConnectOnLaunch,
+                                   assessPing0: profile.assessPing0, autoConnectOnLaunch: autoConnectOnLaunch,
                                    keepRetryingForwardingFailure: keepRetryingForwardingFailure,
                                    useFixedEntry: forInstallation ? false : useFixedEntry,
                                    fixedEntryHelperPath: Self.optionalPath(fixedEntryHelperPath, original: profile.fixedEntryHelperPath),
                                    fixedEntryRuntimePath: Self.optionalPath(fixedEntryRuntimePath, original: profile.fixedEntryRuntimePath),
                                    fixedEntryPythonPath: Self.optionalPath(fixedEntryPythonPath, original: profile.fixedEntryPythonPath))
+        if forPythonDiscovery { return try Self.validatedPythonDiscoveryProfile(edited) }
         try edited.validate()
         return edited
+    }
+
+    static func validatedPythonDiscoveryProfile(_ draft: ServerProfile) throws -> ServerProfile {
+        var candidate = draft
+        // An invalid interpreter must not block discovery; the service filters it before probing.
+        candidate.fixedEntryPythonPath = nil
+        try candidate.validate()
+        candidate.fixedEntryPythonPath = draft.fixedEntryPythonPath
+        return candidate
     }
 
     static func optionalPath(_ value: String, original: String?) -> String? {
@@ -504,7 +529,7 @@ struct ProfileEditor: View {
     }
 
     private func checkSetup() {
-        guard blockedReason == nil, !installation.isInstalling else { return }
+        guard blockedReason == nil, !remoteOperationInProgress else { return }
         do {
             let candidate = try editedProfile()
             errorMessage = nil
@@ -516,7 +541,7 @@ struct ProfileEditor: View {
     }
 
     private func save() {
-        guard blockedReason == nil, !installation.isInstalling else { return }
+        guard blockedReason == nil, !remoteOperationInProgress else { return }
         do {
             let edited = try editedProfile()
             if isNew { try store.add(edited) }
@@ -533,7 +558,20 @@ struct ProfileEditor: View {
     private func close() {
         setup.cancel()
         installation.cancel()
+        pythonDiscovery.cancel()
         onClose()
+    }
+
+    private func discoverPython() {
+        guard discoveryBlockedReason == nil, !pythonDiscovery.isSearching else { return }
+        do {
+            let candidate = try editedProfile(forInstallation: true, forPythonDiscovery: true)
+            errorMessage = nil
+            pythonDiscovery.start(profile: candidate, demoMode: store.demoMode)
+        } catch {
+            pythonDiscovery.cancel(clearResults: true)
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func installFixedEntry() {
@@ -556,6 +594,7 @@ struct ProfileEditor: View {
     }
 }
 
+@MainActor
 struct FixedEntryOptions: View {
     @Binding var isOn: Bool
     @Binding var helperPath: String
@@ -566,6 +605,14 @@ struct FixedEntryOptions: View {
     var demoMode = false
     var onInstall: () -> Void = {}
     var onCancelInstall: () -> Void = {}
+    var discoveryModel: RemotePythonDiscoveryModel?
+    var discoveryBlockedReason: String?
+    var onDiscoverPython: () -> Void = {}
+    var onChoosePython: (String) -> Void = { _ in }
+
+    private var fieldsDisabled: Bool {
+        installState.isInstalling || discoveryModel?.isSearching == true
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -573,7 +620,7 @@ struct FixedEntryOptions: View {
                 .font(.system(size: 12))
                 .accessibilityIdentifier("profile-fixed-entry")
                 .captureLayoutEvidence("profile-fixed-entry")
-                .disabled(installState.isInstalling)
+                .disabled(fieldsDisabled)
             Text("默认关闭。可安装转接程序，或填写已有程序的路径。保存后不会立即连接。")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -581,19 +628,23 @@ struct FixedEntryOptions: View {
                 .captureLayoutEvidence("profile-fixed-entry-notice")
             pathField("远端 Python 路径（可选）", text: $pythonPath,
                       placeholder: "留空使用 python3，例如 /opt/tools/bin/python3", identifier: "profile-fixed-entry-python")
-                .disabled(installState.isInstalling)
+                .disabled(fieldsDisabled)
             Text("填写服务器上已有 Python 3.9+ 的绝对路径；留空使用远端默认 python3。安装、验证和连接均使用此解释器，不升级系统 Python。")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .captureLayoutEvidence("profile-fixed-entry-python-notice")
+            if let discoveryModel {
+                RemotePythonSelectionView(model: discoveryModel, demoMode: demoMode,
+                    blockedReason: discoveryBlockedReason, onSearch: onDiscoverPython, onSelect: onChoosePython)
+            }
             if isOn {
                 pathField("远端转接程序路径", text: $helperPath,
                           placeholder: "例如 /opt/catunnel/relay.py", identifier: "profile-fixed-entry-helper")
-                    .disabled(installState.isInstalling)
+                    .disabled(fieldsDisabled)
                 pathField("远端私有运行目录", text: $runtimePath,
                           placeholder: "例如 /run/user/1000/catunnel-entry", identifier: "profile-fixed-entry-runtime")
-                    .disabled(installState.isInstalling)
+                    .disabled(fieldsDisabled)
                 Text("填写服务器上实际使用的绝对路径，不支持 ~/。转接程序的入口端口必须与“服务器代理端口”相同；后端端口会随连接分配。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)

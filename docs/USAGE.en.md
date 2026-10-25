@@ -96,7 +96,15 @@ This is a path on the server, not the Mac. Leave it empty to keep using `python3
 shell commands such as `conda activate` are not supported. Installation, verification, and all later
 fixed-entry connection, renewal, and release requests use the same choice. It does not change system
 Python, PATH, or other environments. This field is available with the mode off; old profiles are not rewritten.
-After a second SSH session verifies the helper, the editor fills in its paths and enables the draft's toggle.
+
+Alternatively, click **Find available Python** (`查找可用 Python`) to check the entered path, default paths,
+and common environments over an independent SSH session. The list shows absolute paths, versions, and compatibility;
+older versions remain visible but cannot be selected. **Use this Python** (`使用此 Python`) only fills the current form,
+without saving, installing, or connecting. Discovery has scope and timeout limits; an unlisted interpreter may still exist
+and can be entered manually. Discovery, installation, and setup checks cannot run at the same time. Cancelling or closing the editor
+stops the local wait and discards late results. It does not install or upgrade Python or activate environments.
+
+After installation and verification through a second SSH session, the editor fills in the helper's paths and enables the draft's toggle.
 You must still save the profile and connect. Closing the editor does not save these draft changes.
 Repeated installation reuses a matching idle helper without restarting it; an active entry, occupied port,
 or unrecognized installation is rejected without taking over another connection.
@@ -113,7 +121,15 @@ The helper keeps the entry open while each SSH connection receives its own tempo
 The app switches the route only after verifying the new gateway and a listening local proxy.
 An old SSH session can retain its temporary port without blocking the new connection; no old process is killed.
 A missing helper, unsafe runtime, or mismatched entry port fails explicitly; port mismatch is rejected before takeover.
-The ordinary setup check still covers only basic dependencies; the helper is verified during connection establishment.
+The ordinary setup check still covers only basic dependencies; connection establishment verifies the helper and channel.
+
+For a saved profile with fixed entry enabled, the panel and connection details provide **Check fixed entry** (`检查固定入口`).
+An independent SSH session checks the local proxy TCP port, SSH, selected Python, helper, fixed entry, and active backend.
+This is available while connected and does not reuse or stop the tunnel, install, reconnect, request a lease, or change settings.
+Results show the last-check time and distinguish passed, warning, failed, and skipped items; they are not live status.
+A listener does not establish HTTP proxy or Internet access. An active backend may belong to another session,
+and the absence of a backend is reported explicitly. Closing the view or switching servers stops the local check
+and discards late results while leaving the connection running.
 
 Recovery obeys the profile's automatic-reconnect choice. Manual stop closes owned resources and attempts to release
 only its lease. Delayed messages or wake recovery cannot reclaim an entry already taken over by a newer session.
@@ -205,7 +221,6 @@ Checks run when requested and use the selected server's tunnel:
 | Claude API | `https://api.anthropic.com/v1/models` | HTTPS reachability; unauthenticated 401 accepted |
 | Google | `https://www.google.com/generate_204` | HTTPS reachability |
 | Net.Coffee risk | `https://ip.net.coffee/api/iprisk/{ip}` | Third-party assessment of the Claude exit IP |
-| Ping0 webpage | `https://ping0.cc/ip/{ip}` | IP type, risk value, and shared-user estimate for the same Claude exit IP |
 
 Net.Coffee is a per-server option, **off by default**. Enabling it sends the observed public exit IP to that service on the next check.
 With it off, Claude's network trace still reports the exit IP; the assessment is skipped and Net.Coffee is not contacted.
@@ -214,14 +229,12 @@ Third-party check failures do not stop established tunnels. Scores are **for ref
 Responses based on a containing network are labeled as cached network assessments, not exact-IP real-time measurements.
 Claude's network check does not validate browser challenges on the Claude website. Third-party endpoints may change.
 
-The current source adds a separate **Ping0** option, off by default and not included in the `v0.6.0-preview.2` download.
-When enabled, a manual check sends the observed Claude exit IP to Ping0's public lookup page, using the same target as Net.Coffee.
-No API key is required. Only HTML is read; scripts and additional page resources are not loaded, and there is no background polling.
-A higher Ping0 risk value means greater risk, unlike the Net.Coffee trust score; the results are displayed separately.
-Shared users are an estimated range over the previous 12 months, not a live count. Missing fields remain unavailable rather than zero.
-Ping0's residential category can include business and campus networks. Results are reference information only.
-Page changes, access restrictions, invalid responses, or mismatched IPs produce a query error without bypassing challenges or disrupting tunnels.
-See [Ping0's field definitions](https://ping0.cc/ip/faq).
+The current source replaces the **Ping0** check with a browser button, not included in the `v0.6.0-preview.2` download.
+Only clicking it opens the default browser. A public exit IP from a successful check opens `https://ping0.cc/ip/{ip}`;
+historical results are labeled as the last observed exit IP. Without a usable IP, it opens `https://ping0.cc/`.
+Read IP type, risk, and shared-user information on the website. The app no longer queries, parses, or caches Ping0 results
+and has no option to enable its former check. The browser uses the Mac's network settings rather than sending a lookup
+through the selected server's tunnel. Offline demos do not open a browser. See [Ping0's field definitions](https://ping0.cc/ip/faq).
 
 ## Settings and logs
 
@@ -236,7 +249,8 @@ The server document has the form `{"version": 1, "profiles": []}`. Prefer the UI
 do not edit the file while the app is running, as its in-memory configuration may conflict.
 The legacy array format remains readable and is upgraded only on an explicit save.
 Duplicate IDs and conflicting server/port entries are rejected. Missing `identityFile` uses default keys/agent;
-missing `assessIPRisk`, `assessPing0`, `autoConnectOnLaunch`, or `keepRetryingForwardingFailure` defaults to false. `autoReconnect` is stored separately.
+missing `assessIPRisk`, `autoConnectOnLaunch`, or `keepRetryingForwardingFailure` defaults to false. `autoReconnect` is stored separately.
+The legacy `assessPing0` field remains readable and preserved but no longer triggers a check; no manual migration is needed.
 
 Unreadable, invalid, or unsupported-version files produce an error and block writes, preserving the original file.
 Correct the file and restart to reload it. A fresh launch alone does not create a server configuration file.

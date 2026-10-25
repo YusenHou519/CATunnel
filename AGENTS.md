@@ -104,7 +104,7 @@ before connecting. Preserve existing IDs; choose distinct IDs for new profiles.
 | `fixedEntryPythonPath` | Optional remote Python executable absolute path. Omitted or empty uses `python3`; the same choice is used for installation, verification, and every fixed-entry control request. No local expansion of `~/`, shell activation, or automatic interpreter installation. |
 | `identityFile` | Absolute or `~/` key path; omitted/null uses OpenSSH default keys/agent. |
 | `assessIPRisk` | Opt-in Net.Coffee lookup of the observed public exit IP; omitted means `false`. |
-| `assessPing0` | Opt-in Ping0 public-page lookup for the same exit IP; omitted means `false`. Current source only. |
+| `assessPing0` | Legacy compatibility field: read and preserve its value, but it no longer triggers a lookup. Omitted means `false`; no migration is required. |
 | `autoConnectOnLaunch` | Connect this server on normal app launch; omitted means `false`. |
 
 All ports must be 1–65535. The first eight example fields are required; GUI defaults
@@ -136,8 +136,11 @@ requires Python 3.9+. It does not use sudo, edit SSH/shell/service settings, or
 install missing dependencies. Success fills and enables only the editor draft.
 Installation, verification, and connection control use its selected Python path.
 If the server's default `python3` is too old, enter an existing Python 3.9+
-executable's absolute path in the editor;
-this does not change the system Python or activate a Conda environment. Old
+executable's absolute path, or explicitly use **查找可用 Python** in the editor.
+Discovery checks the entered interpreter, default paths, and common environments
+with scope and timeout limits; it may not find every installation. Only **使用此 Python**
+fills the draft, without saving or installing. Discovery and installation/setup checks
+are mutually exclusive. This does not change system Python or activate a Conda environment. Old
 profiles keep their existing behavior without a rewrite. Saving and connecting
 remain explicit. Cancellation may leave a completed remote install;
 retry checks the same managed helper without replacing it. Unknown files, occupied
@@ -145,9 +148,25 @@ ports, incompatible installs, and active leases are preserved and rejected.
 No boot service is configured; after server reboot, explicitly use the action again
 to start a clean stopped installation. Do not claim it reserves a port at the OS
 level or provides Internet access while the Mac proxy is unavailable. The forwarding-conflict
-continuous retry preference is ignored in fixed-entry mode. Setup diagnostics do
-not establish helper readiness; connection establishment checks it explicitly.
+continuous retry preference is ignored in fixed-entry mode. Ordinary setup diagnostics
+cover basic dependencies; connection establishment checks the helper explicitly.
 Preserve old configurations and running connections when building or testing this mode.
+
+For profiles with fixed entry enabled, **检查固定入口** in the panel or connection
+details explicitly checks local proxy TCP, SSH, selected Python, helper status,
+entry listener, and active backend. It uses independent strict SSH, does not request
+a lease, and is available while connected without changing the tunnel or settings.
+Results have a last-check timestamp and passed/warning/failed/skipped states; do not
+describe them as live status, end-to-end Internet access, or proof that a backend
+belongs to this Mac. Closing the view or switching profiles cancels the local wait
+and discards late results. Python discovery follows the same cancellation boundary;
+do not promise that every remote probe stops immediately. Offline modes never run
+these SSH checks.
+
+Ping0 is now an explicit default-browser action, not part of network diagnostics.
+Use a successful check's public exit IP when available, label historical IPs, and
+open the homepage when no usable IP exists. The app no longer fetches or parses
+Ping0 pages. The browser uses the Mac's network settings; offline demos do not open it.
 
 ## Launch and offline commands
 

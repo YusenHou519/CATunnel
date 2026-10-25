@@ -429,64 +429,42 @@ enum ProfileStoreChecks {
             && failing.statuses == beforeFailureStatuses && failing.logs.mapValues { $0.map(\.id) } == beforeFailureLogIDs
             && failing.selectedID == profile(2).id && blockerAfter == blocker && originalAfter == beforeFailureData
 
-        let providerDirectory = temporaryDirectory.appendingPathComponent("independent-ip-providers")
+        let providerDirectory = temporaryDirectory.appendingPathComponent("legacy-ping0-preference")
         let providers = makeStore(providerDirectory)
         var providerProfile = profile(30)
-        checks["ping0DefaultsOffIndependentlyOfOtherPreferences"] = !providerProfile.assessPing0
-            && !providerProfile.assessIPRisk && !providerProfile.autoConnectOnLaunch
         providerProfile.assessPing0 = true
         try providers.add(providerProfile)
-        let ping0Reloaded = makeStore(providerDirectory)
-        checks["ping0OnlyConsentPersistsWithoutEnablingOtherPreferences"] = ping0Reloaded.profiles == [providerProfile]
-            && ping0Reloaded.profiles[0].assessPing0 && !ping0Reloaded.profiles[0].assessIPRisk
-            && !ping0Reloaded.profiles[0].autoConnectOnLaunch
+        let savedLegacyData = try Data(contentsOf: providerDirectory.appendingPathComponent("profiles.json"))
+        let legacyReloaded = makeStore(providerDirectory)
+        let reloadedLegacyData = try Data(contentsOf: providerDirectory.appendingPathComponent("profiles.json"))
+        checks["legacyPing0PreferenceLoadsWithoutRewritingConfiguration"] = legacyReloaded.profiles == [providerProfile]
+            && reloadedLegacyData == savedLegacyData
         providerProfile.assessIPRisk = true
         try providers.save(providerProfile)
-        let bothReloaded = makeStore(providerDirectory)
-        checks["bothProviderConsentsPersistIndependently"] = bothReloaded.profiles == [providerProfile]
-            && bothReloaded.profiles[0].assessIPRisk && bothReloaded.profiles[0].assessPing0
+        checks["unrelatedSavePreservesLegacyPing0Preference"] = makeStore(providerDirectory).profiles == [providerProfile]
 
         let websiteDate = Date(timeIntervalSince1970: 1_800_000_000)
-        let ping0Date = websiteDate.addingTimeInterval(4)
-        let fixtureIP = "198.51.100.30"
+        let scoreDate = websiteDate.addingTimeInterval(4)
         var providerStatus = TunnelStatus(phase: .connected, proxyCheck: .passed,
             websiteResults: WebsiteTarget.allCases.map {
-                .init(target: $0, state: .passed, message: "Offline fixture", checkedAt: websiteDate)
-            },
-            ipRisk: .init(state: .failed, message: "Offline provider failure", checkedAt: websiteDate),
-            ping0: .init(state: .checking, message: "Offline provider pending"))
+                .init(target: $0, state: .passed, message: "Offline fixture", checkedAt: websiteDate,
+                      exitIP: $0 == .claudeNetwork ? "8.8.8.8" : nil)
+            }, ipRisk: .init(state: .checking, message: "Offline score pending"))
         providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
-        checks["completedHistoryWaitsForEnabledPing0"] = providers.lastCompletedCheckAt(for: providerProfile.id) == nil
-        providerStatus.ping0 = .init(state: .available, message: "Offline Ping0 result",
-            assessment: .init(ip: fixtureIP, ipType: "机房 IP", riskValue: 12, sharedUsers: "1 - 10 (极好)"),
-            ip: fixtureIP, checkedAt: ping0Date)
-        providerStatus.ipRisk = .init(state: .checking, message: "Offline provider pending")
+        checks["completedHistoryStillWaitsForEnabledNetCoffee"] = providers.lastCompletedCheckAt(for: providerProfile.id) == nil
+        providerStatus.ipRisk = .init(state: .failed, message: "Offline score failure", checkedAt: scoreDate)
         providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
-        checks["completedHistoryAlsoWaitsForEnabledNetCoffee"] = providers.lastCompletedCheckAt(for: providerProfile.id) == nil
-        providerStatus.ipRisk = .init(state: .failed, message: "Offline provider failure", checkedAt: websiteDate)
-        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
-        checks["providerFailureStillCompletesHistoryWithLatestTimestamp"] = providers.lastCompletedCheckAt(for: providerProfile.id) == ping0Date
-            && providers.status(for: providerProfile.id).ping0.assessment?.riskValue == 12
+        checks["legacyPing0PreferenceDoesNotBlockCompletedHistory"] = providers.lastCompletedCheckAt(for: providerProfile.id) == scoreDate
         providers.controller?.onEvent?(.status(id: providerProfile.id, status: .stopped))
-        checks["disconnectedHistoryPreservesIndependentPing0Result"] = providers.isShowingHistoricalResults(for: providerProfile.id)
-            && providers.presentationStatus(for: providerProfile.id).ping0 == providerStatus.ping0
-            && providers.presentationStatus(for: providerProfile.id).ipRisk.state == .failed
+        checks["browserLinkCanUsePreservedHistoricalExitIP"] = providers.isShowingHistoricalResults(for: providerProfile.id)
+            && Ping0BrowserAction.exitIP(in: providers.presentationStatus(for: providerProfile.id)) == "8.8.8.8"
         var pendingStatus = providerStatus
         pendingStatus.proxyCheck = .checking
-        pendingStatus.ping0 = .init(state: .checking, message: "Offline new request")
+        pendingStatus.ipRisk = .init(state: .checking, message: "Offline new request")
         providers.controller?.onEvent?(.status(id: providerProfile.id, status: pendingStatus))
         providers.controller?.onEvent?(.status(id: providerProfile.id, status: .stopped))
-        checks["interruptedProviderCheckKeepsPreviousCompletedHistory"] = providers.lastCompletedCheckAt(for: providerProfile.id) == ping0Date
-            && providers.presentationStatus(for: providerProfile.id).ping0 == providerStatus.ping0
-        providerProfile.assessPing0 = false
-        try providers.save(providerProfile)
-        let disabledReloaded = makeStore(providerDirectory)
-        checks["disablingPing0ClearsItsHistoryWithoutDisablingNetCoffee"] = !disabledReloaded.profiles[0].assessPing0
-            && disabledReloaded.profiles[0].assessIPRisk && providers.lastCompletedCheckAt(for: providerProfile.id) == nil
-            && providers.presentationStatus(for: providerProfile.id).ping0.assessment == nil
-        providerStatus.ping0 = .init()
-        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
-        checks["disabledPing0DoesNotBlockLegacyCompletedFixtures"] = providers.lastCompletedCheckAt(for: providerProfile.id) == websiteDate
+        checks["interruptedCheckKeepsPreviousCompletedHistory"] = providers.lastCompletedCheckAt(for: providerProfile.id) == scoreDate
+            && providers.presentationStatus(for: providerProfile.id).websiteResults == providerStatus.websiteResults
 
         let isolatedDirectory = temporaryDirectory.appendingPathComponent("demo-must-not-write")
         let demo = makeStore(isolatedDirectory, demo: true)
@@ -498,8 +476,6 @@ enum ProfileStoreChecks {
             && demo.status(for: active.id).ipRisk.state == .skipped
             && demo.status(for: active.id).ipRisk.assessment == nil
             && demo.status(for: active.id).ipRisk.ip == "198.51.100.10"
-            && demo.status(for: active.id).ping0.state == .skipped
-            && demo.status(for: active.id).ping0.assessment == nil
             && demo.lastCompletedCheckAt(for: active.id) != nil
         checks["connectedProfileCannotBeEditedOrDeleted"] = !demo.canModify(active.id)
             && rejects { try demo.save(active) } && rejects { try demo.remove(active.id) }
@@ -545,9 +521,7 @@ enum ProfileStoreChecks {
         checks["demoExplicitConsentProducesOnlySimulatedRiskScore"] = demo.status(for: active.id).ipRisk.state == .available
             && demo.status(for: active.id).ipRisk.assessment?.trustScore == 89
             && demo.status(for: active.id).proxyCheck == .passed && demo.controller == nil
-        checks["demoBothProvidersKeepTheirOwnValues"] = demo.status(for: active.id).ping0.state == .available
-            && demo.status(for: active.id).ping0.assessment?.riskValue == 12
-            && demo.status(for: active.id).ping0.assessment?.sharedUsers == "1 - 10 (极好)"
+        checks["legacyPing0PreferenceDoesNotChangeDemoNetworkChecks"] = demo.status(for: active.id).websiteResults.count == 4
             && demo.status(for: active.id).ipRisk.assessment?.trustScore == 89
         demo.stop(active.id)
         changedDemo.assessIPRisk = false
@@ -562,20 +536,18 @@ enum ProfileStoreChecks {
             && demo.status(for: active.id).ipRisk.assessment == nil
             && demo.status(for: active.id).websiteResults.allSatisfy { $0.state == .passed }
             && demo.status(for: active.id).proxyCheck == .passed && demo.lastCompletedCheckAt(for: active.id) != nil
-        checks["demoPing0OnlyConsentDoesNotEnableNetCoffee"] = demo.status(for: active.id).ping0.state == .available
-            && demo.status(for: active.id).ping0.assessment?.ip == "198.51.100.10"
-            && demo.status(for: active.id).ipRisk.state == .skipped && demo.controller == nil
-        let completedPing0 = demo.status(for: active.id).ping0
-        let completedPing0Date = demo.lastCompletedCheckAt(for: active.id)
+        checks["legacyPing0OnlyPreferenceDoesNotEnableNetCoffee"] = demo.status(for: active.id).ipRisk.state == .skipped
+            && demo.status(for: active.id).proxyCheck == .passed && demo.controller == nil
+        let completedWebsites = demo.status(for: active.id).websiteResults
+        let completedDate = demo.lastCompletedCheckAt(for: active.id)
         demo.testProxy(active.id)
-        let ping0WasChecking = demo.status(for: active.id).ping0.state == .checking
+        let wasChecking = demo.status(for: active.id).proxyCheck == .checking
         demo.stop(active.id)
         try? await Task.sleep(nanoseconds: 1_300_000_000)
-        checks["cancelledPing0DemoCannotReplaceCompletedHistory"] = ping0WasChecking
-            && demo.status(for: active.id).phase == .stopped && demo.status(for: active.id).ping0.assessment == nil
-            && demo.lastCompletedCheckAt(for: active.id) == completedPing0Date
-            && demo.presentationStatus(for: active.id).ping0 == completedPing0
-        demo.stop(active.id)
+        checks["cancelledDemoCannotReplaceCompletedNetworkHistory"] = wasChecking
+            && demo.status(for: active.id).phase == .stopped
+            && demo.lastCompletedCheckAt(for: active.id) == completedDate
+            && demo.presentationStatus(for: active.id).websiteResults == completedWebsites
         try demo.remove(active.id)
         try demo.add(profile(10))
         demo.start(profile(10).id)

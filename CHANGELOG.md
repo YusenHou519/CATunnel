@@ -7,9 +7,17 @@
 - Add an optional, default-off continuous forwarding recovery setting: after the
   existing five-attempt budget, retry every 60 seconds until recovery or manual stop.
   It requires automatic reconnection and a previously established connection.
-- Add a separate, default-off Ping0 public-page check for IP type, risk value,
-  and shared-user estimates, bound to the observed Claude exit IP. Provider
-  errors do not interrupt tunnels; unavailable fields remain explicitly unknown.
+- Add experimental fixed-entry mode, off by default, with explicit in-app helper
+  installation and a shared choice of existing remote Python for installation,
+  verification, and connection control. No system Python installation or upgrade.
+- Add an explicit fixed-entry status check for the local proxy port, SSH, Python,
+  helper, entry, and active backend without changing existing connections. Results
+  have check timestamps and distinguish failures, warnings, and unverified items.
+- Find existing remote Python interpreters within bounded locations and timeouts;
+  show versions and compatibility, and fill only the editor draft on explicit selection.
+- Replace the Ping0 check with a button that opens its website in the default browser,
+  using the observed exit IP when available and labeling historical IPs. Preserve
+  the legacy setting without performing Ping0 requests or parsing its results.
 - Retry transient listener-check timeouts and preserve startup preferences
   changed in another window when saving server edits.
 

@@ -533,7 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                           "profile-keep-retrying-forwarding",
                           "profile-check-setup", "save-profile", "setup-results"])
         checks["editorOffersIdentityConsentAndExplicitSetupCheck"] = ["profile-select-identity", "profile-assess-ip-risk",
-            "profile-assess-ping0", "profile-keep-retrying-forwarding", "profile-check-setup", "setup-results"].allSatisfy { frames[$0] != nil }
+            "profile-keep-retrying-forwarding", "profile-check-setup", "setup-results"].allSatisfy { frames[$0] != nil }
+        checks["editorHasNoLegacyPing0DetectionToggle"] = frames["profile-assess-ping0"] == nil
         if let content = frames["fixture-content"], let save = frames["save-profile"], let scroll = frames["profile-editor-scroll"] {
             checks["setupResultsKeepSaveOutsideScrollingContent"] = content.insetBy(dx: -1, dy: -1).contains(save)
                 && scroll.maxY <= save.minY
@@ -579,7 +580,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         demo.testProxy(first)
         checks["explicitDemoConsentStillShowsRiskScore"] = await waitUntil(seconds: 4) {
             demo.status(for: first).ipRisk.state == .available && demo.status(for: first).ipRisk.assessment != nil
-                && demo.status(for: first).ping0.state == .available && demo.status(for: first).ping0.assessment != nil
         }
         _ = try await captureFixture(MenuBarPanelView(store: demo, showDetails: {}, showAbout: {}, quit: {}),
             size: NSSize(width: 320, height: 640), to: folder.appendingPathComponent("panel-risk-enabled.png"))
@@ -589,52 +589,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func capturePing0Fixtures(in folder: URL) async throws -> [String: Bool] {
         var checks: [String: Bool] = [:]
-        let fixtureIP = "198.51.100.40"
-        let missing = Ping0ResultPresentation(.init(ip: fixtureIP))
-        checks["ping0MissingFieldsRemainUnknown"] = missing.ipType == "未提供"
-            && missing.riskValue == "未提供" && missing.sharedUsers == "未提供"
-        let blank = Ping0ResultPresentation(.init(ip: fixtureIP, ipType: "  ", riskValue: .nan, sharedUsers: "\n"))
-        checks["ping0BlankAndInvalidFieldsRemainUnknown"] = blank.ipType == "未提供"
-            && blank.riskValue == "未提供" && blank.sharedUsers == "未提供"
-            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 101)).riskValue == "未提供"
-        checks["ping0RiskScalePreservesZeroAndHighRiskWithoutTrustConversion"] =
-            Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 0)).riskValue == "0 / 100"
-            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 99)).riskValue == "99 / 100"
-            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 12.5)).riskValue == "12.5 / 100"
-
-        let checkedAt = Date(timeIntervalSince1970: 1_800_000_000)
-        let assessments: [(String, Ping0Assessment)] = [
-            ("long", .init(ip: fixtureIP, ipType: "家庭宽带 IP（示例：较长的网页类型说明）", riskValue: 12.5, sharedUsers: "10000+")),
-            ("missing", .init(ip: fixtureIP, ipType: nil, riskValue: nil, sharedUsers: nil))
-        ]
-        for (label, assessment) in assessments {
-            let identifier = "ping0-\(label)"
-            let metrics = ["\(identifier)-type", "\(identifier)-risk", "\(identifier)-users"]
-            let frames = try await captureFixture(Ping0ResultView(
-                result: .init(state: .available, assessment: assessment, ip: fixtureIP, checkedAt: checkedAt),
-                enabled: true, historical: true, fontScale: 1.2, identifierPrefix: identifier)
+        var opened: [URL] = []
+        let opener: (URL) -> Bool = { opened.append($0); return true }
+        _ = Ping0WebsiteButton(ip: "8.8.8.8", opener: opener)
+        checks["renderingPing0ButtonDoesNotOpenBrowser"] = opened.isEmpty
+        checks["explicitPing0ActionUsesDefaultBrowserURL"] = Ping0BrowserAction.open(ip: "8.8.8.8", demoMode: false, opener: opener)
+            && opened.map(\.absoluteString) == ["https://ping0.cc/ip/8.8.8.8"]
+        checks["offlineDemoCannotOpenPing0Browser"] = !Ping0BrowserAction.open(ip: "8.8.8.8", demoMode: true, opener: opener)
+            && opened.count == 1
+        checks["missingExitIPOpensPing0HomepageOnlyOnClick"] = Ping0BrowserAction.open(ip: nil, demoMode: false, opener: opener)
+            && opened.last == Ping0Website.homeURL && opened.count == 2
+        checks["browserOpenFailureIsReported"] = !Ping0BrowserAction.open(ip: nil, demoMode: false, opener: { _ in false })
+        var status = TunnelStatus(websiteResults: [.init(target: .claudeNetwork, state: .failed, exitIP: "8.8.8.8")])
+        checks["failedNetworkEvidenceDoesNotSupplyBrowserIP"] = Ping0BrowserAction.exitIP(in: status) == nil
+        status.websiteResults = [.init(target: .claudeNetwork, state: .passed, exitIP: "8.8.8.8")]
+        checks["browserUsesSuccessfulClaudeExitEvidence"] = Ping0BrowserAction.exitIP(in: status) == "8.8.8.8"
+        for (label, ip, historical) in [("current", Optional("8.8.8.8"), false), ("historical", Optional("2606:4700:4700::1111"), true), ("unknown", nil, false)] {
+            let id = "ping0-browser-" + label
+            let frames = try await captureFixture(Ping0WebsiteButton(ip: ip, historical: historical,
+                demoMode: true, fontScale: 1.2, identifierPrefix: id, opener: opener)
                 .padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
-                to: folder.appendingPathComponent("ping0-narrow-\(label).png"), identifiers: [identifier] + metrics)
-            if let content = frames["fixture-content"], let card = frames[identifier] {
-                checks["ping0MetricsFitNarrowPanel-\(label)"] = metrics.allSatisfy { id in
-                    guard let frame = frames[id] else { return false }
-                    return frame.width > 0 && frame.height > 0
-                        && content.insetBy(dx: -1, dy: -1).contains(frame)
-                        && card.insetBy(dx: -1, dy: -1).contains(frame)
-                }
-                if let type = frames[metrics[0]], let risk = frames[metrics[1]], let users = frames[metrics[2]] {
-                    checks["ping0MetricRowsDoNotOverlap-\(label)"] = type.maxY <= risk.minY && risk.maxY <= users.minY
-                } else { checks["ping0MetricRowsDoNotOverlap-\(label)"] = false }
-            } else { checks["ping0MetricsFitNarrowPanel-\(label)"] = false }
+                to: folder.appendingPathComponent(id + ".png"), identifiers: [id, id + "-ip"])
+            checks["ping0BrowserButtonFitsNarrowPanel-" + label] = frames[id].map {
+                frames["fixture-content"]?.insetBy(dx: -1, dy: -1).contains($0) == true
+            } ?? false
+            if ip == nil { checks["unknownExitDoesNotInventAnIP"] = frames[id + "-ip"] == nil }
         }
-        _ = try await captureFixture(VStack(alignment: .leading, spacing: 20) {
-            Ping0ResultView(result: .init(state: .failed, message: "示例：页面结构已变化，未提取检测结果。",
-                ip: fixtureIP, checkedAt: checkedAt), enabled: true, historical: true,
-                fontScale: 1.2, identifierPrefix: "ping0-failed")
-            Divider()
-            Ping0ResultView(result: .skipped(), enabled: false, fontScale: 1.2, identifierPrefix: "ping0-skipped")
-        }.padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
-            to: folder.appendingPathComponent("ping0-narrow-unavailable.png"))
+        checks["capturingPing0FixturesDoesNotOpenBrowser"] = opened.count == 2
+        return checks
+    }
+
+    private func captureInspectionFixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        var profile = ProfileStoreChecks.profile(24)
+        profile.useFixedEntry = true
+        profile.fixedEntryHelperPath = "/opt/catunnel/relay.py"
+        profile.fixedEntryRuntimePath = "/tmp/catunnel-fixture-runtime"
+        let diagnosticModel = FixedEntryDiagnosticsModel()
+        diagnosticModel.start(profile: profile, demoMode: true)
+        checks["fixedEntryDemoDiagnosticsComplete"] = await waitUntil(seconds: 2) { !diagnosticModel.isChecking }
+            && diagnosticModel.items.count == 6
+        let id = "inspection-fixture"
+        let frames = try await captureFixture(FixedEntryDiagnosticsView(profile: profile, demoMode: true,
+            identifierPrefix: id, model: diagnosticModel).padding(16).frame(width: 300)
+            .background(Color(nsColor: .windowBackgroundColor)),
+            to: folder.appendingPathComponent("fixed-entry-inspection.png"), identifiers: [id, id + "-check"])
+        checks["fixedEntryCheckButtonFitsNarrowPanel"] = frames[id + "-check"].map {
+            frames["fixture-content"]?.insetBy(dx: -1, dy: -1).contains($0) == true
+        } ?? false
+        _ = try await captureFixture(FixedEntryDiagnosticResults(items: diagnosticModel.items, identifierPrefix: id)
+            .padding(16).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
+            to: folder.appendingPathComponent("fixed-entry-inspection-results.png"))
+        let pythonModel = RemotePythonDiscoveryModel()
+        pythonModel.start(profile: profile, demoMode: true)
+        checks["pythonDiscoveryDemoListsSupportedAndOldVersions"] = await waitUntil(seconds: 2) { !pythonModel.isSearching }
+            && pythonModel.result?.candidates.count == 2
+        let choices = try await captureFixture(RemotePythonSelectionView(model: pythonModel, demoMode: true,
+            blockedReason: nil, onSearch: {}, onSelect: { _ in }).padding(16).frame(width: 300)
+            .background(Color(nsColor: .windowBackgroundColor)),
+            to: folder.appendingPathComponent("python-discovery-choices.png"),
+            identifiers: ["profile-python-discovery", "profile-python-discovery-search"])
+        checks["pythonDiscoveryChoicesFitNarrowPanel"] = choices["profile-python-discovery"].map {
+            choices["fixture-content"]?.insetBy(dx: -1, dy: -1).contains($0) == true
+        } ?? false
+        let demo = TunnelStore(persistSettings: false, demoMode: true)
+        _ = try await captureFixture(ProfileEditor(profile: profile, isNew: true, store: demo, pythonModel: pythonModel),
+            to: folder.appendingPathComponent("python-discovery-editor.png"))
+        diagnosticModel.cancel()
+        pythonModel.cancel()
+        await demo.shutdown()
         return checks
     }
 
@@ -895,6 +918,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: temp) }
             checks.merge(try await ProfileStoreChecks.run(in: temp)) { _, result in result }
+            checks.merge(try await InspectionUIChecks.run()) { _, result in result }
             checks.merge(try await LoginItemChecks.run(in: temp.appendingPathComponent("login-items"))) { _, result in result }
 
             let lockURL = AppIdentity.lockURL(temporaryDirectory: temp)
@@ -970,6 +994,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             checks.merge(try await captureReconnectFixtures(in: folder)) { _, result in result }
             checks.merge(try await captureSetupFixtures(in: folder)) { _, result in result }
             checks.merge(try await capturePing0Fixtures(in: folder)) { _, result in result }
+            checks.merge(try await captureInspectionFixtures(in: folder)) { _, result in result }
             checks.merge(try await captureForwardingRetryFixtures(in: folder)) { _, result in result }
             checks.merge(try await captureFixedEntryFixtures(in: folder)) { _, result in result }
         } catch { failure = error.localizedDescription }

@@ -16,6 +16,8 @@ private struct Manifest: Decodable {
     let fixtureHome: String
     let selectedPythonPath: String
     let missingPythonPath: String
+    let condaPythonPath: String
+    let injectedOldPythonPath: String
     let installerScriptPath: String
     let helperPath: String
     let markers: [String]
@@ -30,6 +32,7 @@ private final class InstallationRun {
     private var checks: [[String: Any]] = []
     private var phases: [String: TunnelPhase] = [:]
     private var directories: [String] = []
+    private var inspectionCommands: [[String: Any]] = []
     private var fixed: TunnelController?
     private var legacy: TunnelController?
 
@@ -54,7 +57,11 @@ private final class InstallationRun {
               // retains /private/tmp. Compare generated paths in their manifest spelling.
               manifest.selectedPythonPath == manifest.fixtureHome + "/bin/python 'selected 3",
               manifest.missingPythonPath == manifest.fixtureHome + "/bin/python missing",
+              manifest.condaPythonPath == manifest.fixtureHome + "/existing conda 'environment/bin/python3",
+              manifest.injectedOldPythonPath == manifest.fixtureHome + "/miniconda3/bin/python3",
               FileManager.default.isExecutableFile(atPath: manifest.selectedPythonPath),
+              FileManager.default.isExecutableFile(atPath: manifest.condaPythonPath),
+              FileManager.default.isExecutableFile(atPath: manifest.injectedOldPythonPath),
               !FileManager.default.fileExists(atPath: manifest.missingPythonPath),
               (homeMetadata[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
               (homeMetadata[.posixPermissions] as? NSNumber)?.intValue == 0o700 else {
@@ -167,6 +174,158 @@ private final class InstallationRun {
                 Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
             }
         }
+    }
+
+    private struct EntrySnapshot: Decodable, Equatable {
+        let epoch: String
+        let generation: Int
+        let activeGeneration: Int?
+        let backendPort: Int?
+        let leaseSeconds: Double
+        enum CodingKeys: String, CodingKey {
+            case epoch, generation
+            case activeGeneration = "active_generation", backendPort = "backend_port", leaseSeconds = "lease_seconds"
+        }
+    }
+
+    private func allowInspection(_ command: String, kind: String, port: Int) throws {
+        guard !inspectionCommands.contains(where: { ($0["command"] as? String) == command }) else { return }
+        inspectionCommands.append(["command": command, "kind": kind, "port": port])
+        let path = root.appendingPathComponent("inspection-commands.json")
+        try JSONSerialization.data(withJSONObject: inspectionCommands, options: [.sortedKeys]).write(to: path, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+    }
+
+    private func allowDiagnostics(_ profile: ServerProfile) throws {
+        try allowInspection(FixedEntryDiagnostics.environmentCommand(profile), kind: "environment", port: profile.remotePort)
+        try allowInspection(FixedEntryDiagnostics.statusCommand(profile), kind: "status", port: profile.remotePort)
+        try allowInspection(context.listenerCommand(profile.remotePort), kind: "listener", port: profile.remotePort)
+    }
+
+    private func snapshot(_ profile: ServerProfile) async throws -> EntrySnapshot {
+        let inspection = RemoteInspection(context: context, executor: nil)
+        let result = try await inspection.run {
+            try await inspection.remote(profile, command: FixedEntryDiagnostics.statusCommand(profile),
+                                        input: FixedEntryProtocol.input(.status))
+        }
+        _ = try FixedEntryProtocol.status(result, expectedPort: profile.remotePort)
+        return try JSONDecoder().decode(EntrySnapshot.self, from: Data(result.stdout.utf8))
+    }
+
+    private func exerciseInspection(_ enabled: ServerProfile, installation: FixedEntryInstallation) async throws {
+        try allowDiagnostics(enabled)
+        let before = try await snapshot(enabled)
+        guard let backendPort = before.backendPort else { throw Failure(description: "Active fixture has no backend") }
+        try allowInspection(context.listenerCommand(backendPort), kind: "listener", port: backendPort)
+        let readyBefore = try ready(installation)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let encodedBefore = try encoder.encode(enabled)
+        let auditStart = try auditRecords().count
+        let diagnostics = FixedEntryDiagnostics(executionContext: context)
+        let items = await diagnostics.run(enabled)
+        try check("real SSH read-only inspection verifies all six active fixed-entry components",
+                  items.count == 6 && items.allSatisfy { $0.state == .passed })
+        try await marker(enabled.remotePort, index: 0)
+        try await marker(manifest.legacyPort, index: 1)
+
+        var selected = enabled
+        selected.fixedEntryPythonPath = manifest.selectedPythonPath
+        try allowInspection(RemotePythonDiscovery.command(selected), kind: "discovery", port: selected.remotePort)
+        let discovery = RemotePythonDiscovery(executionContext: context)
+        let found = try await discovery.run(selected)
+        try check("discovery executes the selected quoted path and an existing Conda registry candidate",
+                  found.candidates.contains { $0.path == manifest.selectedPythonPath && $0.isSupported }
+                  && found.candidates.contains { $0.path == manifest.condaPythonPath && $0.isSupported })
+        try check("discovery classifies the explicitly injected old candidate without selecting or upgrading it",
+                  found.candidates.contains { $0.path == manifest.injectedOldPythonPath && $0.version == "3.8.20" && !$0.isSupported }
+                  && !found.candidates.contains { $0.path.contains("absent environment") })
+
+        var missingPython = enabled
+        missingPython.fixedEntryPythonPath = manifest.missingPythonPath
+        try allowDiagnostics(missingPython)
+        let missingPythonItems = await diagnostics.run(missingPython)
+        try check("real missing interpreter is a Python failure while SSH remains authenticated",
+                  missingPythonItems.first { $0.id == "python" }?.state == .failed
+                  && missingPythonItems.first { $0.id == "ssh" }?.state == .passed)
+        var missingHelper = enabled
+        missingHelper.fixedEntryHelperPath = manifest.fixtureHome + "/missing-helper.py"
+        try allowDiagnostics(missingHelper)
+        let missingHelperItems = await diagnostics.run(missingHelper)
+        try check("real missing helper is reported without installing or starting anything",
+                  missingHelperItems.first { $0.id == "helper" }?.state == .failed)
+        var occupied = enabled
+        occupied.remotePort = manifest.localPorts[1]
+        try allowDiagnostics(occupied)
+        let occupiedItems = await diagnostics.run(occupied)
+        try check("an unrelated listening entry cannot pass compatible helper verification",
+                  occupiedItems.first { $0.id == "helper" }?.state == .failed
+                  && occupiedItems.first { $0.id == "entry" }?.state != .passed)
+        try await marker(manifest.localPorts[1], index: 1)
+
+        let environmentDelay = root.appendingPathComponent("delay-inspection-environment")
+        try Data().write(to: environmentDelay)
+        let pendingInspection = Task { await diagnostics.run(enabled) }
+        do {
+            try await wait("inspection did not reach its delayed real SSH reply") {
+                FileManager.default.fileExists(atPath: root.appendingPathComponent("inspection-environment-before-reply").path)
+            }
+        } catch {
+            diagnostics.cancel()
+            _ = await pendingInspection.value
+            try? FileManager.default.removeItem(at: environmentDelay)
+            throw error
+        }
+        diagnostics.cancel()
+        let cancelledItems = await pendingInspection.value
+        try FileManager.default.removeItem(at: environmentDelay)
+        try check("cancelled inspection discards the delayed successful environment result",
+                  cancelledItems.count == 6 && cancelledItems.allSatisfy { $0.state == .skipped && $0.message.contains("取消") })
+
+        let discoveryDelay = root.appendingPathComponent("delay-inspection-discovery")
+        try Data().write(to: discoveryDelay)
+        let pendingDiscovery = Task { try await discovery.run(selected) }
+        do {
+            try await wait("discovery did not reach its delayed real SSH reply", seconds: 20) {
+                FileManager.default.fileExists(atPath: root.appendingPathComponent("inspection-discovery-before-reply").path)
+            }
+        } catch {
+            discovery.cancel()
+            _ = await pendingDiscovery.result
+            try? FileManager.default.removeItem(at: discoveryDelay)
+            throw error
+        }
+        discovery.cancel()
+        try await expectFailure("cancelled discovery never publishes late Python candidates") { _ = try await pendingDiscovery.value }
+        try FileManager.default.removeItem(at: discoveryDelay)
+        let recovered = await diagnostics.run(enabled)
+        try check("inspection can run again after cancellation without reconnecting",
+                  recovered.count == 6 && recovered.allSatisfy { $0.state == .passed } && phases[enabled.id] == .connected)
+        let guarded = RemoteInspection(context: context, executor: nil)
+        let unlisted = try await guarded.run {
+            try await guarded.remote(enabled, command: "printf CATUNNEL_UNLISTED_INSPECTION")
+        }
+        try check("fixture refuses commands outside the exact inspection allowlist", unlisted.exitCode == 126)
+        let mutation = try await guarded.run {
+            try await guarded.remote(enabled, command: FixedEntryDiagnostics.statusCommand(enabled),
+                                     input: Data("{\"op\":\"begin\"}\n".utf8))
+        }
+        try check("allowlisted status command still refuses mutation input before contacting the helper", mutation.exitCode == 126)
+        let after = try await snapshot(enabled)
+        try check("inspection and discovery preserve helper PID, epoch, generation, active lease and backend",
+                  try ready(installation) == readyBefore && before == after)
+        try check("inspection and discovery leave their input profile unchanged",
+                  try encoder.encode(enabled) == encodedBefore)
+        let records = Array(try auditRecords().dropFirst(auditStart))
+        try check("inspection audit contains only read-only commands and existing tunnel lease renewals",
+                  records.contains { ($0["kind"] as? String) == "readonly-discovery" }
+                  && records.contains { ($0["kind"] as? String) == "readonly-status" }
+                  && records.allSatisfy {
+                      ($0["kind"] as? String)?.hasPrefix("readonly-") == true
+                      || (($0["kind"] as? String) == "installed-control" && ($0["op"] as? String) == "renew")
+                  })
+        try await marker(enabled.remotePort, index: 0)
+        try await marker(manifest.legacyPort, index: 1)
     }
 
     private func exerciseSelectedPython() async throws {
@@ -299,12 +458,18 @@ private final class InstallationRun {
         fixed?.start(enabled)
         try await wait("installed helper did not accept the real Swift tunnel") { phases[enabled.id] == .connected }
         try await marker(enabled.remotePort, index: 0)
+        try await exerciseInspection(enabled, installation: installed)
         try await expectFailure("installation refuses an active helper without taking its lease") { _ = try await runner.install(original) }
         try check("refusing active entry preserves its helper process", try ready(installed) == initialReady)
         try await marker(enabled.remotePort, index: 0)
         try await marker(manifest.legacyPort, index: 1)
         await fixed?.shutdown()
         fixed = nil
+        let inactiveItems = await FixedEntryDiagnostics(executionContext: context).run(enabled)
+        try check("a running helper with no active backend reports a warning instead of readiness",
+                  inactiveItems.first { $0.id == "helper" }?.state == .passed
+                  && inactiveItems.first { $0.id == "entry" }?.state == .passed
+                  && inactiveItems.first { $0.id == "backend" }?.state == .warning)
         let afterStop = try await runner.install(original)
         try check("stopping the tunnel leaves the installed helper reusable", afterStop.reused && (try ready(afterStop)) == initialReady)
 

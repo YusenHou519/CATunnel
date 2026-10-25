@@ -195,7 +195,7 @@ struct MenuBarPanelView: View {
         let status = store.presentationStatus(for: profile.id)
         let phase = phasePresentation(current.phase)
         let historical = store.isShowingHistoricalResults(for: profile.id)
-        let checking = current.proxyCheck == .checking || current.ipRisk.state == .checking || current.ping0.state == .checking
+        let checking = current.proxyCheck == .checking || current.ipRisk.state == .checking
 
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
@@ -264,7 +264,7 @@ struct MenuBarPanelView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!canTest(current))
-                    .help("通过该服务器的隧道检测服务，并查询已开启的 Net.Coffee / Ping0 IP 信息")
+                    .help("通过该服务器的隧道检测服务，并查询已开启的 Net.Coffee 出口 IP 评分")
                     .accessibilityIdentifier("panel-test-\(profile.id)")
                 }
                 HStack(spacing: 4) {
@@ -290,9 +290,15 @@ struct MenuBarPanelView: View {
             Divider()
             riskSection(status.ipRisk, profile: profile, historical: historical)
             Divider()
-            Ping0ResultView(result: status.ping0, enabled: profile.assessPing0,
-                            historical: historical, fontScale: store.panelAppearance.fontScale,
-                            identifierPrefix: "panel-ping0-\(profile.id)")
+            Ping0WebsiteButton(ip: Ping0BrowserAction.exitIP(in: status), historical: historical,
+                               demoMode: store.demoMode, fontScale: store.panelAppearance.fontScale,
+                               identifierPrefix: "panel-ping0-\(profile.id)")
+            if profile.useFixedEntry {
+                Divider()
+                FixedEntryDiagnosticsView(profile: profile, demoMode: store.demoMode,
+                                          identifierPrefix: "panel-fixed-entry-\(profile.id)")
+                    .id(profile.id)
+            }
 
         }
     }
@@ -565,7 +571,7 @@ struct MenuBarPanelView: View {
 
     private func canTest(_ status: TunnelStatus) -> Bool {
         status.phase == .connected && status.proxyCheck != .checking
-            && status.ipRisk.state != .checking && status.ping0.state != .checking
+            && status.ipRisk.state != .checking
     }
 
     private func phasePresentation(_ phase: TunnelPhase) -> (title: String, icon: String, color: Color) {

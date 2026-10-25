@@ -57,7 +57,7 @@ struct CheckRunner {
             ("parallel owned probes terminate independently", parallelChildCleanup),
             ("response capture is bounded and reports truncation", boundedCapture),
             ("invalid start and idempotent stop", invalidStart)
-        ] + SetupChecks.checks + Ping0Checks.checks + FixedEntryProfileChecks.checks
+        ] + SetupChecks.checks + Ping0Checks.checks + FixedEntryProfileChecks.checks + RemoteInspectionChecks.checks
             + FixedEntryGatewayChecks.checks + FixedEntryCoreChecks.checks + FixedEntryInstallerChecks.checks
         var failures = 0
         for (name, check) in checks {

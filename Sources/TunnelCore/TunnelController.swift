@@ -14,7 +14,6 @@ public final class TunnelController {
         case website(WebsiteTarget, CommandResult)
         case exitIP(CommandResult)
         case ipRisk(IPRiskCheckResult)
-        case ping0(Ping0CheckResult)
     }
 
     private final class Session {
@@ -188,15 +187,12 @@ public final class TunnelController {
         session.proxyRunID = runID
         session.status.proxyCheck = .checking
         session.status.proxyMessage = "正在检测 \(WebsiteTarget.allCases.count) 项连通性"
-            + (session.profile.assessIPRisk || session.profile.assessPing0 ? "和出口 IP 信息…" : "…")
+            + (session.profile.assessIPRisk ? "和出口 IP 信息…" : "…")
         session.status.websiteResults = WebsiteTarget.allCases.map {
             .init(target: $0, state: .checking, message: "检测中…")
         }
         session.status.ipRisk = session.profile.assessIPRisk
             ? .init(state: .checking, message: "正在获取 Claude 出口 IP…", stage: .exitIP)
-            : .skipped()
-        session.status.ping0 = session.profile.assessPing0
-            ? .init(state: .checking, message: "正在获取 Claude 出口 IP…")
             : .skipped()
         publish(session)
         session.proxyTask = Task { [weak self, weak session] in
@@ -227,19 +223,15 @@ public final class TunnelController {
                             session.status.websiteResults[index] = networkResult
                         }
                         self.log(id, "Claude 网络连通：\(networkResult.message)")
-                        // Both providers assess the same observed exit, even with domain-based proxy routing.
+                        // Assess the observed Claude exit even with domain-based proxy routing.
                         group.addTask { .ipRisk(await self.runIPRiskProbe(session, runID: runID, networkResult: networkResult)) }
-                        group.addTask { .ping0(await self.runPing0Probe(session, runID: runID, networkResult: networkResult)) }
                     case let .ipRisk(result):
                         session.status.ipRisk = result
                         // Do not log the raw trace or third-party response body.
                         self.log(id, "Net.Coffee IP 风险：\(result.message)")
-                    case let .ping0(result):
-                        session.status.ping0 = result
-                        self.log(id, "Ping0 IP 信息：\(result.message)")
                     }
                     let completed = session.status.websiteResults.filter { $0.state != .checking }.count
-                    let riskProgress = session.status.ipRisk.state == .checking || session.status.ping0.state == .checking
+                    let riskProgress = session.status.ipRisk.state == .checking
                         ? " · IP 信息检测中" : ""
                     session.status.proxyMessage = "检测进度 · \(completed)/\(WebsiteTarget.allCases.count)\(riskProgress)"
                     self.publish(session)
@@ -280,10 +272,6 @@ public final class TunnelController {
                     ? .init(state: .failed, message: "原 SSH 控制连接已失效，请重新检测",
                         stage: session.status.ipRisk.stage, ip: session.status.ipRisk.ip,
                         countryCode: session.status.ipRisk.countryCode, checkedAt: Date())
-                    : .skipped(checkedAt: Date())
-                session.status.ping0 = session.profile.assessPing0
-                    ? .init(state: .failed, message: "原 SSH 控制连接已失效，请重新检测",
-                            ip: session.status.ping0.ip, checkedAt: Date())
                     : .skipped(checkedAt: Date())
                 self.log(id, "网站检测后控制连接复核失败：\(SafeLog.clean(masterCheck.stderr))")
             }
@@ -332,32 +320,6 @@ public final class TunnelController {
         } catch {
             return .init(state: .failed, message: "已获取出口 IP，评分查询失败：\(error.localizedDescription)",
                 stage: .riskAssessment, ip: networkResult.exitIP, countryCode: networkResult.countryCode, checkedAt: Date())
-        }
-    }
-
-    private func runPing0Probe(_ session: Session, runID: UUID,
-                              networkResult: WebsiteCheckResult) async -> Ping0CheckResult {
-        guard !Task.isCancelled, isCurrentProbe(session, runID: runID) else { return .init() }
-        do {
-            let plan = try Ping0AssessmentPlan.make(enabled: session.profile.assessPing0,
-                networkResult: networkResult, remotePort: session.profile.remotePort, checkedAt: Date())
-            let command: String, ip: String
-            switch plan {
-            case let .completed(result): return result
-            case let .request(request, address): command = request; ip = address
-            }
-            session.status.ping0 = .init(state: .checking, message: "正在读取 Ping0 公开查询页…", ip: ip)
-            publish(session)
-            guard !Task.isCancelled, isCurrentProbe(session, runID: runID) else { return .init() }
-            let response = await runProbe(session, arguments: SSHCommands.remote(session.profile,
-                socket: session.socket, command: command), timeout: 24, stdoutLimit: Ping0Probe.bodyLimit + 1024)
-            guard !Task.isCancelled, isCurrentProbe(session, runID: runID) else { return .init() }
-            let assessment = try Ping0Probe.assessment(from: response, expectedIP: ip)
-            return .init(state: .available, message: "已获取 Ping0 网页信息；缺失项目显示为未提供",
-                         assessment: assessment, ip: ip, checkedAt: Date())
-        } catch {
-            return .init(state: .failed, message: "Ping0 查询失败：\(error.localizedDescription)",
-                         ip: networkResult.exitIP, checkedAt: Date())
         }
     }
 
