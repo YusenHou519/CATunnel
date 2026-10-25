@@ -16,6 +16,7 @@ use your Mac's local proxy through an SSH tunnel.
 - **Multiple servers:** add, edit, remove, and switch profiles from the top tabs.
 - **Tunnel controls:** independent connection states, reconnection after interruptions, and per-server startup preferences.
 - **Recovery options (current source):** close owned SSH processes before sleep and resume eligible connections on wake; optional forwarding retries every 60 seconds, off by default.
+- **Fixed entry (current source, experimental):** an optional remote relay keeps the entry port open, with in-app installation and a choice of an existing server-side Python interpreter.
 - **Network checks:** OpenAI API, Claude, and Google reachability, plus optional Net.Coffee assessments and Ping0 IP type, risk, and shared-user estimates.
 - **Native menu-bar UI:** launch at login, adjustable panel width and font size, and a first-use guide.
 
@@ -65,6 +66,39 @@ for configuration, verification commands, and troubleshooting.
 SSH aliases, ProxyJump, interactive passwords, and IPv6 host addresses are not yet supported.
 API reachability does not prove account or model access. IP scores are optional, off by default, and for reference only.
 Ping0 lookup is in the current source, not the preview download above. It reads a public webpage and reports an error if the page changes or access is restricted.
+
+## Experimental fixed entry
+
+This feature is **off by default** and available in the current source, but is not included in
+the `v0.6.0-preview.2` download. Build the current source using the [contributing guide](CONTRIBUTING.md).
+Existing profiles continue to use direct SSH reverse forwarding.
+
+When enabled, a remote relay keeps a fixed loopback entry, such as `127.0.0.1:17892`, open while it runs.
+Each SSH connection uses a separate temporary backend port; the app verifies the new channel before
+switching the forwarding target. An old SSH session can retain its temporary port without needing
+to be terminated before reconnection.
+
+1. Stop the server connection you want to edit, open its settings, and check the remote proxy port (`服务器代理端口`).
+2. The server must already have **Python 3.9+**. Enter its executable's absolute path in
+   **Remote Python path (optional)** (`远端 Python 路径（可选）`), such as `/opt/tools/bin/python3`.
+   Leave it empty to use the server's default `python3`. This must be a path on the server;
+   `~/` expansion and commands such as `conda activate` are not supported. The field is available with fixed entry off.
+3. Click **Install and enable** (`安装并启用`). Over SSH, the app installs the relay under the current account's
+   `~/.catunnel/fixed-entry/<port>/`, starts it, then uses a separate SSH request to verify that it stays running.
+   You do not need to turn on the fixed-entry toggle beforehand.
+4. On success, the app fills in the helper and runtime paths and turns on fixed entry in the **current form**.
+   Click **Save** (`保存`), then start the tunnel manually. Successful installation or saving settings does not connect automatically.
+
+Installation, verification, and later connection, renewal, and release requests all use the same Python choice.
+The app does not upgrade system Python, download dependencies, use sudo, or modify SSH or shell configuration.
+Cancelling installation stops only the local wait; the remote operation may have completed. Clicking again checks
+for and reuses a compatible idle installation. An occupied port, active entry, or unrecognized installation files
+are preserved and reported as errors.
+
+Installation does not configure server boot startup. After a clean server restart, use the button again to start
+the existing installation. The relay cannot provide Internet access while the Mac is asleep, and existing TCP
+requests do not move to a new channel; immediate recovery after every sleep is not guaranteed.
+See the [user guide](docs/USAGE.en.md) for detailed configuration, manual deployment, and limits.
 
 ## TODO
 
