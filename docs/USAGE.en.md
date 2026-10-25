@@ -36,7 +36,7 @@ see [installation validation limits](VALIDATION.md#clean-configuration-versus-a-
 - **Mac:** deployment target macOS 13+. Start an HTTP or HTTP-compatible mixed proxy listening on `127.0.0.1`.
   A SOCKS-only port cannot directly serve the HTTP proxy checks used here.
 - **Server:** an accessible Linux OpenSSH server, with `ss` for listener checks and `curl` for network checks.
-  SSH must permit reverse forwarding, and the chosen remote port must be available.
+  SSH must permit reverse forwarding; the default direct mode requires the chosen remote port to be available.
 - **Authentication:** a verified host fingerprint in `known_hosts`, plus default keys, an available SSH agent, or a selected key.
   Load encrypted keys into the agent from a terminal before using the app's noninteractive connections.
 
@@ -79,6 +79,52 @@ CATunnel never automatically accepts fingerprints or edits `known_hosts`. Key co
 Stop a profile's connection and checks before editing or deleting it. Deletion asks for confirmation and removes only the local entry.
 Other connections are preserved; deleting the last entry restores the empty list. Tabs scroll horizontally for larger lists.
 Closing the panel leaves tunnels running; quitting the app stops connections it created. Width and font size are adjustable in Settings.
+
+## Experimental fixed entry (off by default)
+
+The current source adds **Fixed entry mode** (`固定入口模式（实验性）`) below the port fields in the server editor.
+New and older profiles default to off and continue using the existing direct SSH forwarding path.
+Stop that profile before editing its connection settings. Saving does not connect or install a remote service.
+
+The **Install and enable** (`安装并启用`) button is available even when this mode is off.
+It uses the current SSH account to install the bundled helper under
+`~/.catunnel/fixed-entry/<port>/` and start it in the background. Python 3.9+ must already be
+installed on the server. No administrator access, dependency download, or SSH server policy change is used.
+If the default `python3` is too old, enter an existing Python 3.9+ executable's absolute path in
+**Remote Python path (optional)** (`远端 Python 路径（可选）`), for example `/opt/tools/bin/python3`.
+This is a path on the server, not the Mac. Leave it empty to keep using `python3`; `~/` expansion and
+shell commands such as `conda activate` are not supported. Installation, verification, and all later
+fixed-entry connection, renewal, and release requests use the same choice. It does not change system
+Python, PATH, or other environments. This field is available with the mode off; old profiles are not rewritten.
+After a second SSH session verifies the helper, the editor fills in its paths and enables the draft's toggle.
+You must still save the profile and connect. Closing the editor does not save these draft changes.
+Repeated installation reuses a matching idle helper without restarting it; an active entry, occupied port,
+or unrecognized installation is rejected without taking over another connection.
+Cancel stops the local installation wait. The remote step may already have finished; retrying checks for
+and reuses that installation rather than deleting it.
+
+When enabled, provide absolute remote paths for the helper and its private runtime directory.
+A compatible [relay.py](../experimental/fixed_entry/relay.py) must already run on the server using Python 3.9+,
+under the SSH account, with an owned `0700` runtime directory and the configured remote proxy entry port.
+You can use the installation button to prepare it or supply a manually installed helper. Existing default keys,
+SSH agent use, and strict host-key verification are preserved. The Mac implementation is native Swift and needs no Python.
+
+The helper keeps the entry open while each SSH connection receives its own temporary reverse port.
+The app switches the route only after verifying the new gateway and a listening local proxy.
+An old SSH session can retain its temporary port without blocking the new connection; no old process is killed.
+A missing helper, unsafe runtime, or mismatched entry port fails explicitly; port mismatch is rejected before takeover.
+The ordinary setup check still covers only basic dependencies; the helper is verified during connection establishment.
+
+Recovery obeys the profile's automatic-reconnect choice. Manual stop closes owned resources and attempts to release
+only its lease. Delayed messages or wake recovery cannot reclaim an entry already taken over by a newer session.
+Ambiguous ownership stops recovery and requires an explicit reconnect. Continuous forwarding-conflict retry applies
+only to direct mode; its stored setting is hidden and ignored in fixed-entry mode.
+
+An open entry cannot provide Internet access while the Mac is asleep, and existing TCP requests do not migrate.
+Installation does not configure boot startup or a supervisor. After a clean server shutdown, use the button
+again to start the matching helper. Residual files after forced termination require separate inspection.
+This feature does not claim real Linux deployment or physical sleep/wake validation.
+See the [experiment guide](../experimental/fixed_entry/README.md) for isolated checks.
 
 ## Point remote tools at the tunnel
 
@@ -124,6 +170,7 @@ The panel's **Settings** (`设置`) page provides the first two controls; reconn
 | Launch at login (`登录时启动`) | Opens CATunnel after Mac login; does not decide which servers to connect |
 | Connect on app startup (`启动后自动连接`) | Per-server choice for the next app launch; off for new and older profiles by default |
 | Reconnect after interruption (`意外断开后自动重连`) | Restores an already requested connection; manually stopped servers stay stopped |
+| Keep retrying an occupied port (`端口占用时持续重试`) | New in current source and off by default; requires automatic reconnection and a previously established connection |
 
 Changing startup connection preferences does not interrupt or rebuild an active tunnel. The server editor also exposes this option.
 Login startup uses macOS login-item services. Settings reports pending approval and links to system settings when needed.
@@ -131,8 +178,21 @@ Keep the app in a stable location, normally Applications, before enabling it.
 
 A recognized older CATunnel login item is inspected read-only. Only explicitly changing the switch backs up and handles that item;
 unrecognized contents are preserved with an error. Opening Settings alone does not migrate login items.
-These switches are included in preview packages starting with `v0.6.0-preview.2` (build 5).
+Login and startup-connection switches are included in preview packages starting with `v0.6.0-preview.2` (build 5).
 Offline demo switches affect simulated state only, without login registration, normal settings changes, or server connections.
+
+The current source adds sleep handling and continuous recovery; these changes are not included in that download.
+On a system sleep notification, CATunnel closes its owned SSH processes. Wake resumes only servers that were still requested
+and had automatic reconnection enabled before sleep. Manually stopped servers, exhausted retries, and servers with automatic
+reconnection disabled remain stopped. Connection requests made during sleep wait for wake only when automatic reconnection is enabled;
+otherwise, connect manually after wake.
+The remote server may retain an old listener; these changes do not guarantee immediate recovery.
+
+After a previously established connection is lost, forwarding conflicts normally retry after 15, 30, 60, 60, and 60 seconds, then stop.
+Enabling continuous retry adds one attempt every 60 seconds after that budget, until recovery or a manual stop.
+The preference is saved in the server editor for the next connection; it is disabled and has no effect when automatic reconnection is off.
+It does not make initial port conflicts, authentication failures, or host-key failures retry indefinitely. SSH forwarding rejection
+can also indicate server policy, so inspect the logs.
 
 ## Network checks and data
 
@@ -145,6 +205,7 @@ Checks run when requested and use the selected server's tunnel:
 | Claude API | `https://api.anthropic.com/v1/models` | HTTPS reachability; unauthenticated 401 accepted |
 | Google | `https://www.google.com/generate_204` | HTTPS reachability |
 | Net.Coffee risk | `https://ip.net.coffee/api/iprisk/{ip}` | Third-party assessment of the Claude exit IP |
+| Ping0 webpage | `https://ping0.cc/ip/{ip}` | IP type, risk value, and shared-user estimate for the same Claude exit IP |
 
 Net.Coffee is a per-server option, **off by default**. Enabling it sends the observed public exit IP to that service on the next check.
 With it off, Claude's network trace still reports the exit IP; the assessment is skipped and Net.Coffee is not contacted.
@@ -152,6 +213,15 @@ No API keys, cookies, or model prompts are sent. There is no analytics or teleme
 Third-party check failures do not stop established tunnels. Scores are **for reference only**, not a guarantee of account or model access.
 Responses based on a containing network are labeled as cached network assessments, not exact-IP real-time measurements.
 Claude's network check does not validate browser challenges on the Claude website. Third-party endpoints may change.
+
+The current source adds a separate **Ping0** option, off by default and not included in the `v0.6.0-preview.2` download.
+When enabled, a manual check sends the observed Claude exit IP to Ping0's public lookup page, using the same target as Net.Coffee.
+No API key is required. Only HTML is read; scripts and additional page resources are not loaded, and there is no background polling.
+A higher Ping0 risk value means greater risk, unlike the Net.Coffee trust score; the results are displayed separately.
+Shared users are an estimated range over the previous 12 months, not a live count. Missing fields remain unavailable rather than zero.
+Ping0's residential category can include business and campus networks. Results are reference information only.
+Page changes, access restrictions, invalid responses, or mismatched IPs produce a query error without bypassing challenges or disrupting tunnels.
+See [Ping0's field definitions](https://ping0.cc/ip/faq).
 
 ## Settings and logs
 
@@ -166,7 +236,7 @@ The server document has the form `{"version": 1, "profiles": []}`. Prefer the UI
 do not edit the file while the app is running, as its in-memory configuration may conflict.
 The legacy array format remains readable and is upgraded only on an explicit save.
 Duplicate IDs and conflicting server/port entries are rejected. Missing `identityFile` uses default keys/agent;
-missing `assessIPRisk` or `autoConnectOnLaunch` defaults to false. `autoReconnect` is stored separately.
+missing `assessIPRisk`, `assessPing0`, `autoConnectOnLaunch`, or `keepRetryingForwardingFailure` defaults to false. `autoReconnect` is stored separately.
 
 Unreadable, invalid, or unsupported-version files produce an error and block writes, preserving the original file.
 Correct the file and restart to reload it. A fresh launch alone does not create a server configuration file.
@@ -184,7 +254,7 @@ Passwords, private keys, and API credentials are not saved.
 | Key authentication fails | Check key path, permissions, user, and agent; the app does not prompt for a password |
 | Remote port occupied or forwarding refused | Choose an available loopback port or ask the administrator about SSH policy; do not kill unknown processes |
 | Connected tunnel, unusable tool | Test with explicit `curl --proxy`, then check the program's proxy support, login state, and service permissions separately |
-| No recovery after sleep | Check that the Mac, local proxy, and network are available; inspect reconnection settings and logs; stopped servers stay stopped |
+| No recovery after sleep | Check the Mac, local proxy, network, and reconnection logs; an old server session may still hold the port; stopped servers stay stopped |
 | Configuration load error | Preserve and back up the file, repair its format/version, then restart; do not replace it with an empty configuration |
 
 Remove credentials and private host details before filing an Issue. Build, demo, and test commands are in

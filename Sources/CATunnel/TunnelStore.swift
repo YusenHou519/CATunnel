@@ -11,13 +11,14 @@ struct TunnelLogEntry: Identifiable {
 }
 
 enum StoreError: LocalizedError {
-    case activeConnection, unknownServer, configurationUnavailable
+    case activeConnection, unknownServer, configurationUnavailable, mismatchedOriginalProfile
 
     var errorDescription: String? {
         switch self {
         case .activeConnection: return "请先停止这台服务器的隧道，再修改连接设置。"
         case .unknownServer: return "找不到这台服务器。"
         case .configurationUnavailable: return "服务器配置无法读取。为保护原文件，修改已禁用；请修复配置文件后重新启动 CATunnel。"
+        case .mismatchedOriginalProfile: return "服务器编辑信息不匹配，请关闭编辑窗口后重试。"
         }
     }
 }
@@ -138,6 +139,7 @@ final class TunnelStore: ObservableObject {
         current.proxyMessage = "历史检测 · " + completed.status.proxyMessage
         current.websiteResults = completed.status.websiteResults
         current.ipRisk = completed.status.ipRisk
+        current.ping0 = completed.status.ping0
         return current
     }
 
@@ -194,12 +196,20 @@ final class TunnelStore: ObservableObject {
         appendLog(profile.id, demoMode ? "演示：服务器仅添加到内存中，没有写入配置文件。" : "服务器已添加，尚未开启隧道。")
     }
 
-    func save(_ profile: ServerProfile) throws {
+    func save(_ profile: ServerProfile, original: ServerProfile? = nil,
+              autoConnectOnLaunchEdited: Bool = false) throws {
         try ensureConfigurationAvailable()
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { throw StoreError.unknownServer }
         guard canModify(profile.id) else { throw StoreError.activeConnection }
+        if let original, original.id != profile.id { throw StoreError.mismatchedOriginalProfile }
+        var edited = profile
+        if let original, !autoConnectOnLaunchEdited,
+           profile.autoConnectOnLaunch == original.autoConnectOnLaunch {
+            // The settings panel can change this preference while the editor is open.
+            edited.autoConnectOnLaunch = profiles[index].autoConnectOnLaunch
+        }
         var updated = profiles
-        updated[index] = profile
+        updated[index] = edited
         try persistProfiles(updated)
         profiles = updated
         cancelDemoTask(profile.id)
@@ -291,12 +301,16 @@ final class TunnelStore: ObservableObject {
     }
 
     private func receiveStatus(_ id: String, _ status: TunnelStatus) {
-        guard profiles.contains(where: { $0.id == id }) else { return }
+        guard let profile = profiles.first(where: { $0.id == id }) else { return }
+        let terminalRiskStates: [IPRiskCheckState] = [.available, .failed, .skipped]
+        let netCoffeeFinished = !profile.assessIPRisk || terminalRiskStates.contains(status.ipRisk.state)
+        let ping0Finished = !profile.assessPing0 || terminalRiskStates.contains(status.ping0.state)
         if [.passed, .partial, .failed].contains(status.proxyCheck),
            status.websiteResults.count == WebsiteTarget.allCases.count,
            status.websiteResults.allSatisfy({ [.passed, .restricted, .failed].contains($0.state) }),
-           [.available, .failed, .skipped].contains(status.ipRisk.state) {
-            let dates = status.websiteResults.compactMap(\.checkedAt) + [status.ipRisk.checkedAt].compactMap { $0 }
+           netCoffeeFinished, ping0Finished {
+            let dates = status.websiteResults.compactMap(\.checkedAt)
+                + [status.ipRisk.checkedAt, status.ping0.checkedAt].compactMap { $0 }
             completedChecks[id] = CompletedCheck(status: status, completedAt: dates.max() ?? Date())
         }
         statuses[id] = status
@@ -353,6 +367,9 @@ final class TunnelStore: ObservableObject {
         current.ipRisk = profile.assessIPRisk
             ? .init(state: .checking, message: "演示：正在模拟出口评分…", stage: .exitIP)
             : .skipped()
+        current.ping0 = profile.assessPing0
+            ? .init(state: .checking, message: "演示：正在模拟 Ping0 查询…")
+            : .skipped()
         receiveStatus(id, current)
         let connectedAt = current.connectedAt
         demoTasks[id] = Task { [weak self] in
@@ -399,7 +416,11 @@ final class TunnelStore: ObservableObject {
             ipRisk: profile.assessIPRisk
                 ? .init(state: .available, message: "演示：信任分 89 · 纯净", stage: .riskAssessment,
                         assessment: assessment, ip: ip, countryCode: "US", checkedAt: checkedAt)
-                : .skipped(ip: ip, countryCode: "US", checkedAt: checkedAt))
+                : .skipped(ip: ip, countryCode: "US", checkedAt: checkedAt),
+            ping0: profile.assessPing0
+                ? .init(state: .available, message: "演示：Ping0 IP 信息", assessment: .init(ip: ip,
+                        ipType: "机房 IP", riskValue: 12, sharedUsers: "1 - 10 (极好)"), ip: ip, checkedAt: checkedAt)
+                : .skipped(ip: ip, checkedAt: checkedAt))
     }
 
     private func appendLog(_ id: String, _ message: String) {

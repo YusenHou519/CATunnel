@@ -9,25 +9,40 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var remotePort: Int
     public var localPort: Int
     public var autoReconnect: Bool
+    public var keepRetryingForwardingFailure: Bool
     public var identityFile: String?
     public var assessIPRisk: Bool
+    public var assessPing0: Bool
     public var autoConnectOnLaunch: Bool
+    public var useFixedEntry: Bool
+    public var fixedEntryHelperPath: String?
+    public var fixedEntryRuntimePath: String?
+    public var fixedEntryPythonPath: String?
 
     public init(id: String, name: String, host: String, user: String, sshPort: Int,
                 remotePort: Int, localPort: Int, autoReconnect: Bool,
-                identityFile: String? = nil, assessIPRisk: Bool = false,
-                autoConnectOnLaunch: Bool = false) {
+                identityFile: String? = nil, assessIPRisk: Bool = false, assessPing0: Bool = false,
+                autoConnectOnLaunch: Bool = false, keepRetryingForwardingFailure: Bool = false,
+                useFixedEntry: Bool = false, fixedEntryHelperPath: String? = nil,
+                fixedEntryRuntimePath: String? = nil, fixedEntryPythonPath: String? = nil) {
         self.id = id; self.name = name; self.host = host; self.user = user
         self.sshPort = sshPort; self.remotePort = remotePort; self.localPort = localPort
         self.autoReconnect = autoReconnect
+        self.keepRetryingForwardingFailure = keepRetryingForwardingFailure
         self.identityFile = identityFile
         self.assessIPRisk = assessIPRisk
+        self.assessPing0 = assessPing0
         self.autoConnectOnLaunch = autoConnectOnLaunch
+        self.useFixedEntry = useFixedEntry
+        self.fixedEntryHelperPath = fixedEntryHelperPath
+        self.fixedEntryRuntimePath = fixedEntryRuntimePath
+        self.fixedEntryPythonPath = fixedEntryPythonPath
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, host, user, sshPort, remotePort, localPort, autoReconnect, identityFile, assessIPRisk
-        case autoConnectOnLaunch
+        case autoConnectOnLaunch, assessPing0, keepRetryingForwardingFailure
+        case useFixedEntry, fixedEntryHelperPath, fixedEntryRuntimePath, fixedEntryPythonPath
     }
 
     public init(from decoder: Decoder) throws {
@@ -40,13 +55,28 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         remotePort = try values.decode(Int.self, forKey: .remotePort)
         localPort = try values.decode(Int.self, forKey: .localPort)
         autoReconnect = try values.decode(Bool.self, forKey: .autoReconnect)
+        keepRetryingForwardingFailure = try values.decodeIfPresent(Bool.self, forKey: .keepRetryingForwardingFailure) ?? false
         identityFile = try values.decodeIfPresent(String.self, forKey: .identityFile)
         assessIPRisk = try values.decodeIfPresent(Bool.self, forKey: .assessIPRisk) ?? false
+        assessPing0 = try values.decodeIfPresent(Bool.self, forKey: .assessPing0) ?? false
         autoConnectOnLaunch = try values.decodeIfPresent(Bool.self, forKey: .autoConnectOnLaunch) ?? false
+        useFixedEntry = try values.decodeIfPresent(Bool.self, forKey: .useFixedEntry) ?? false
+        fixedEntryHelperPath = try values.decodeIfPresent(String.self, forKey: .fixedEntryHelperPath)
+        fixedEntryRuntimePath = try values.decodeIfPresent(String.self, forKey: .fixedEntryRuntimePath)
+        fixedEntryPythonPath = try values.decodeIfPresent(String.self, forKey: .fixedEntryPythonPath)
     }
 
     public var expandedIdentityFile: String? {
         identityFile.map { ($0 as NSString).expandingTildeInPath }
+    }
+
+    func resolvedFixedEntryPython() throws -> String {
+        guard let path = fixedEntryPythonPath, !path.isEmpty else { return "python3" }
+        guard path.hasPrefix("/"), path != "/", path.utf8.count <= 4096,
+              !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            throw ProfileValidationError.invalidFixedEntryPythonPath
+        }
+        return path
     }
 
     public static let examples: [ServerProfile] = [
@@ -95,6 +125,15 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
                 throw ProfileValidationError.invalidIdentityFile
             }
         }
+        _ = try resolvedFixedEntryPython()
+        if useFixedEntry {
+            for path in [fixedEntryHelperPath, fixedEntryRuntimePath] {
+                guard let path, path.hasPrefix("/"), path.count <= 4096,
+                      !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                    throw ProfileValidationError.invalidFixedEntryPath
+                }
+            }
+        }
     }
 
     public func validateForConnection() throws {
@@ -107,7 +146,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum ProfileValidationError: LocalizedError {
-    case invalidID, invalidName, invalidHost, invalidUser, invalidPort, invalidIdentityFile, exampleHost
+    case invalidID, invalidName, invalidHost, invalidUser, invalidPort, invalidIdentityFile, invalidFixedEntryPath, invalidFixedEntryPythonPath, exampleHost
     public var errorDescription: String? {
         switch self {
         case .invalidID: return "服务器标识格式无效。"
@@ -116,6 +155,8 @@ public enum ProfileValidationError: LocalizedError {
         case .invalidUser: return "SSH 用户名格式无效。"
         case .invalidPort: return "端口必须在 1–65535 之间。"
         case .invalidIdentityFile: return "私钥路径必须以 / 或 ~/ 开头，且不要包含控制字符。"
+        case .invalidFixedEntryPath: return "固定入口模式需填写两条以 / 开头的远端绝对路径，每条最多 4096 字，且不要包含控制字符；不支持 ~/。"
+        case .invalidFixedEntryPythonPath: return "远端 Python 路径请留空使用 python3，或填写以 / 开头的可执行文件绝对路径，最多 4096 字节，且不要包含控制字符；不支持 ~/ 或命令参数。"
         case .exampleHost: return "这是示例服务器，请先在服务器设置中填写真实主机和 SSH 用户名，再开启隧道。"
         }
     }
@@ -185,16 +226,18 @@ public struct TunnelStatus: Equatable, Sendable {
     public var connectedAt: Date?
     public var websiteResults: [WebsiteCheckResult]
     public var ipRisk: IPRiskCheckResult
+    public var ping0: Ping0CheckResult
 
     public init(phase: TunnelPhase = .stopped, message: String = "未开启",
                 proxyCheck: ProxyCheckState = .unchecked, proxyMessage: String = "尚未测试代理出口",
                 connectedAt: Date? = nil,
                 websiteResults: [WebsiteCheckResult] = WebsiteTarget.allCases.map { .init(target: $0) },
-                ipRisk: IPRiskCheckResult = .init()) {
+                ipRisk: IPRiskCheckResult = .init(), ping0: Ping0CheckResult = .init()) {
         self.phase = phase; self.message = message; self.proxyCheck = proxyCheck
         self.proxyMessage = proxyMessage; self.connectedAt = connectedAt
         self.websiteResults = websiteResults
         self.ipRisk = ipRisk
+        self.ping0 = ping0
     }
     public static let stopped = TunnelStatus()
 }

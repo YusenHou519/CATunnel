@@ -114,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var observation: AnyCancellable?
     private var panelSizeObservation: AnyCancellable?
     private var appearanceObservation: NSKeyValueObservation?
+    private var workspaceSleepBridge: WorkspaceSleepBridge?
     private var terminating = false
     private var readyToTerminate = false
     var exitCode: Int32 = 0
@@ -142,6 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         makePopover()
         appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.syncPopoverAppearance() }
+        }
+        if !options.isOffline {
+            workspaceSleepBridge = WorkspaceSleepBridge(center: NSWorkspace.shared.notificationCenter,
+                onSleep: { [weak store] in store?.controller?.suspendForSleep() },
+                onWake: { [weak store] in store?.controller?.resumeAfterWake() })
         }
 
         if let path = options.previewPath {
@@ -193,6 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if readyToTerminate { return .terminateNow }
         if !terminating {
             terminating = true
+            workspaceSleepBridge?.stop()
+            workspaceSleepBridge = nil
             Task {
                 await store.shutdown()
                 readyToTerminate = true
@@ -202,6 +210,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         return .terminateCancel
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        workspaceSleepBridge?.stop()
+        workspaceSleepBridge = nil
     }
 
     private func makeApplicationMenu() {
@@ -455,6 +468,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return checks
     }
 
+    private func captureReconnectFixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let phases: [TunnelPhase] = [.stopped, .checking, .connecting, .connected, .reconnecting, .failed]
+        checks["disabledReconnectDoesNotShowActiveHint"] = phases.allSatisfy {
+            AutoReconnectPresentation(enabled: false, phase: $0) == nil
+        }
+        checks["reconnectHintDistinguishesWaitingFromTerminalFailure"] =
+            AutoReconnectPresentation(enabled: true, phase: .reconnecting)?.title == "等待自动重试"
+            && AutoReconnectPresentation(enabled: true, phase: .failed)?.title == "自动重连已停止"
+            && AutoReconnectPresentation(enabled: true, phase: .failed)?.help.contains("手动重新开启") == true
+        checks["reconnectHintDoesNotClaimInactiveConnectionsAreRetrying"] =
+            AutoReconnectPresentation(enabled: true, phase: .stopped)?.title == "未开启连接"
+            && AutoReconnectPresentation(enabled: true, phase: .checking)?.title == "正在检查连接"
+            && AutoReconnectPresentation(enabled: true, phase: .connecting)?.title == "正在建立连接"
+            && AutoReconnectPresentation(enabled: true, phase: .connected)?.title == "自动重连已开启"
+
+        let fixture = TunnelStore(persistSettings: false, demoMode: true)
+        fixture.updatePanelAppearance(width: 300, fontScale: 1.2)
+        let id = fixture.profiles[0].id
+        fixture.selectedID = id
+        for phase in [TunnelPhase.reconnecting, .failed] {
+            fixture.statuses[id] = TunnelStatus(phase: phase, message: phase == .reconnecting
+                ? "示例：服务器转发端口暂时不可用，稍后将重试。"
+                : "示例：自动重试已停止，请检查端口占用后手动重新开启。")
+            let identifier = "auto-reconnect-status-\(id)"
+            let frames = try await captureFixture(MenuBarPanelView(store: fixture, showDetails: {}, showAbout: {}, quit: {}),
+                size: NSSize(width: 300, height: 640), to: folder.appendingPathComponent("panel-\(phase.rawValue).png"),
+                identifiers: [identifier])
+            if let content = frames["fixture-content"], let hint = frames[identifier] {
+                checks["reconnectHintFitsNarrowPanel-\(phase.rawValue)"] = hint.width > 0 && hint.height > 0
+                    && content.insetBy(dx: -1, dy: -1).contains(hint)
+            } else { checks["reconnectHintFitsNarrowPanel-\(phase.rawValue)"] = false }
+        }
+        checks["reconnectFixturesRemainOffline"] = fixture.controller == nil && fixture.demoMode
+        await fixture.shutdown()
+        return checks
+    }
+
     private func captureSetupFixtures(in folder: URL) async throws -> [String: Bool] {
         var checks: [String: Bool] = [:]
         let guideFrames = try await captureFixture(GettingStartedView(),
@@ -478,10 +529,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             && model.items.allSatisfy { $0.state == .passed && $0.message.hasPrefix("演示：") }
         let frames = try await captureFixture(ProfileEditor(profile: profile, isNew: true, store: demo, setupModel: model),
             to: folder.appendingPathComponent("setup-editor.png"),
-            identifiers: ["profile-editor-scroll", "profile-select-identity", "profile-assess-ip-risk",
+            identifiers: ["profile-editor-scroll", "profile-select-identity", "profile-assess-ip-risk", "profile-assess-ping0",
+                          "profile-keep-retrying-forwarding",
                           "profile-check-setup", "save-profile", "setup-results"])
         checks["editorOffersIdentityConsentAndExplicitSetupCheck"] = ["profile-select-identity", "profile-assess-ip-risk",
-            "profile-check-setup", "setup-results"].allSatisfy { frames[$0] != nil }
+            "profile-assess-ping0", "profile-keep-retrying-forwarding", "profile-check-setup", "setup-results"].allSatisfy { frames[$0] != nil }
         if let content = frames["fixture-content"], let save = frames["save-profile"], let scroll = frames["profile-editor-scroll"] {
             checks["setupResultsKeepSaveOutsideScrollingContent"] = content.insetBy(dx: -1, dy: -1).contains(save)
                 && scroll.maxY <= save.minY
@@ -520,16 +572,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         demo.stop(first)
         var optedIn = demo.profiles[0]
         optedIn.assessIPRisk = true
+        optedIn.assessPing0 = true
         try demo.save(optedIn)
         demo.start(first)
         _ = await waitUntil(seconds: 3) { demo.status(for: first).phase == .connected }
         demo.testProxy(first)
         checks["explicitDemoConsentStillShowsRiskScore"] = await waitUntil(seconds: 4) {
             demo.status(for: first).ipRisk.state == .available && demo.status(for: first).ipRisk.assessment != nil
+                && demo.status(for: first).ping0.state == .available && demo.status(for: first).ping0.assessment != nil
         }
         _ = try await captureFixture(MenuBarPanelView(store: demo, showDetails: {}, showAbout: {}, quit: {}),
             size: NSSize(width: 320, height: 640), to: folder.appendingPathComponent("panel-risk-enabled.png"))
         await demo.shutdown()
+        return checks
+    }
+
+    private func capturePing0Fixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let fixtureIP = "198.51.100.40"
+        let missing = Ping0ResultPresentation(.init(ip: fixtureIP))
+        checks["ping0MissingFieldsRemainUnknown"] = missing.ipType == "未提供"
+            && missing.riskValue == "未提供" && missing.sharedUsers == "未提供"
+        let blank = Ping0ResultPresentation(.init(ip: fixtureIP, ipType: "  ", riskValue: .nan, sharedUsers: "\n"))
+        checks["ping0BlankAndInvalidFieldsRemainUnknown"] = blank.ipType == "未提供"
+            && blank.riskValue == "未提供" && blank.sharedUsers == "未提供"
+            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 101)).riskValue == "未提供"
+        checks["ping0RiskScalePreservesZeroAndHighRiskWithoutTrustConversion"] =
+            Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 0)).riskValue == "0 / 100"
+            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 99)).riskValue == "99 / 100"
+            && Ping0ResultPresentation(.init(ip: fixtureIP, riskValue: 12.5)).riskValue == "12.5 / 100"
+
+        let checkedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let assessments: [(String, Ping0Assessment)] = [
+            ("long", .init(ip: fixtureIP, ipType: "家庭宽带 IP（示例：较长的网页类型说明）", riskValue: 12.5, sharedUsers: "10000+")),
+            ("missing", .init(ip: fixtureIP, ipType: nil, riskValue: nil, sharedUsers: nil))
+        ]
+        for (label, assessment) in assessments {
+            let identifier = "ping0-\(label)"
+            let metrics = ["\(identifier)-type", "\(identifier)-risk", "\(identifier)-users"]
+            let frames = try await captureFixture(Ping0ResultView(
+                result: .init(state: .available, assessment: assessment, ip: fixtureIP, checkedAt: checkedAt),
+                enabled: true, historical: true, fontScale: 1.2, identifierPrefix: identifier)
+                .padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
+                to: folder.appendingPathComponent("ping0-narrow-\(label).png"), identifiers: [identifier] + metrics)
+            if let content = frames["fixture-content"], let card = frames[identifier] {
+                checks["ping0MetricsFitNarrowPanel-\(label)"] = metrics.allSatisfy { id in
+                    guard let frame = frames[id] else { return false }
+                    return frame.width > 0 && frame.height > 0
+                        && content.insetBy(dx: -1, dy: -1).contains(frame)
+                        && card.insetBy(dx: -1, dy: -1).contains(frame)
+                }
+                if let type = frames[metrics[0]], let risk = frames[metrics[1]], let users = frames[metrics[2]] {
+                    checks["ping0MetricRowsDoNotOverlap-\(label)"] = type.maxY <= risk.minY && risk.maxY <= users.minY
+                } else { checks["ping0MetricRowsDoNotOverlap-\(label)"] = false }
+            } else { checks["ping0MetricsFitNarrowPanel-\(label)"] = false }
+        }
+        _ = try await captureFixture(VStack(alignment: .leading, spacing: 20) {
+            Ping0ResultView(result: .init(state: .failed, message: "示例：页面结构已变化，未提取检测结果。",
+                ip: fixtureIP, checkedAt: checkedAt), enabled: true, historical: true,
+                fontScale: 1.2, identifierPrefix: "ping0-failed")
+            Divider()
+            Ping0ResultView(result: .skipped(), enabled: false, fontScale: 1.2, identifierPrefix: "ping0-skipped")
+        }.padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
+            to: folder.appendingPathComponent("ping0-narrow-unavailable.png"))
         return checks
     }
 
@@ -542,6 +647,167 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return condition()
     }
 
+    private func checkWorkspaceSleepBridge() -> [String: Bool] {
+        let center = NotificationCenter()
+        var calls: [String] = []
+        var bridge: WorkspaceSleepBridge? = WorkspaceSleepBridge(center: center,
+            onSleep: { calls.append("sleep") }, onWake: { calls.append("wake") })
+        center.post(name: Notification.Name("CATunnelUnrelatedFixture"), object: nil)
+        var checks = ["workspaceBridgeIgnoresUnrelatedNotifications": calls.isEmpty]
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        checks["workspaceBridgeDeliversSleepAndWakeSynchronouslyInOrder"] = calls == ["sleep", "wake"]
+        bridge?.stop()
+        bridge?.stop()
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        checks["stoppedWorkspaceBridgeDoesNotDeliverFurtherCallbacks"] = calls == ["sleep", "wake"]
+        let releasedBridge = { [weak bridge] in bridge }
+        bridge = nil
+        checks["workspaceBridgeObserversDoNotRetainBridge"] = releasedBridge() == nil
+        var automaticRemoval: WorkspaceSleepBridge? = WorkspaceSleepBridge(center: center,
+            onSleep: { calls.append("unexpected-sleep") }, onWake: { calls.append("unexpected-wake") })
+        let releasedAutomatic = { [weak automaticRemoval] in automaticRemoval }
+        automaticRemoval = nil
+        center.post(name: NSWorkspace.willSleepNotification, object: nil)
+        center.post(name: NSWorkspace.didWakeNotification, object: nil)
+        checks["workspaceBridgeDeinitRemovesObservers"] = releasedAutomatic() == nil && calls == ["sleep", "wake"]
+        checks["offlineApplicationDoesNotObserveSystemSleep"] = options.isOffline && workspaceSleepBridge == nil
+        return checks
+    }
+
+    private func captureForwardingRetryFixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        for enabled in [true, false] {
+            var choice = true
+            let binding = Binding(get: { choice }, set: { choice = $0 })
+            let identifier = "profile-keep-retrying-forwarding"
+            let frames = try await captureFixture(ForwardingRetryOption(isOn: binding, autoReconnect: enabled)
+                .padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
+                to: folder.appendingPathComponent("forwarding-retry-\(enabled ? "enabled" : "disabled").png"),
+                identifiers: [identifier])
+            if let content = frames["fixture-content"], let toggle = frames[identifier] {
+                checks["continuousRetryOptionFitsNarrowLayout-\(enabled)"] = toggle.width > 0 && toggle.height > 0
+                    && content.insetBy(dx: -1, dy: -1).contains(toggle)
+            } else { checks["continuousRetryOptionFitsNarrowLayout-\(enabled)"] = false }
+            checks["renderingRetryOptionPreservesStoredChoice-\(enabled)"] = choice
+        }
+        return checks
+    }
+
+    private func captureFixedEntryFixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let toggle = "profile-fixed-entry", helper = "profile-fixed-entry-helper"
+        let runtime = "profile-fixed-entry-runtime", notice = "profile-fixed-entry-notice"
+        let python = "profile-fixed-entry-python", pythonNotice = "profile-fixed-entry-python-notice"
+        let install = "profile-install-fixed-entry", installNotice = "profile-fixed-entry-install-notice"
+        for enabled in [false, true] {
+            let frames = try await captureFixture(FixedEntryOptions(isOn: .constant(enabled),
+                helperPath: .constant("/opt/fixture relay/relay.py"),
+                runtimePath: .constant("/run/user/1000/fixture-entry"),
+                pythonPath: .constant("/tmp/fixture tools/bin/python3"))
+                .padding(18).frame(width: 300).background(Color(nsColor: .windowBackgroundColor)),
+                to: folder.appendingPathComponent("fixed-entry-option-\(enabled ? "enabled" : "disabled").png"),
+                identifiers: [toggle, helper, runtime, notice, python, pythonNotice, install, installNotice])
+            let expected = enabled ? [toggle, helper, runtime, notice, python, pythonNotice, install, installNotice]
+                : [toggle, notice, python, pythonNotice, install, installNotice]
+            if let content = frames["fixture-content"] {
+                checks["fixedEntryOptionFitsNarrowLayout-\(enabled)"] = expected.allSatisfy { identifier in
+                    guard let frame = frames[identifier] else { return false }
+                    return frame.width > 0 && frame.height > 0 && content.insetBy(dx: -1, dy: -1).contains(frame)
+                }
+            } else { checks["fixedEntryOptionFitsNarrowLayout-\(enabled)"] = false }
+            if !enabled {
+                checks["disabledFixedEntryHidesRemotePathFields"] = frames[helper] == nil && frames[runtime] == nil
+                checks["disabledFixedEntryStillAllowsChoosingPythonBeforeInstallation"] = frames[python] != nil
+                    && frames[pythonNotice] != nil
+            }
+        }
+
+        let fixture = TunnelStore(persistSettings: false)
+        var profile = ProfileStoreChecks.profile(41)
+        profile.useFixedEntry = true
+        profile.fixedEntryHelperPath = "/opt/fixture relay/relay.py"
+        profile.fixedEntryRuntimePath = "/run/user/1000/fixture-entry"
+        profile.fixedEntryPythonPath = "/tmp/fixture tools/bin/python3"
+        try fixture.add(profile)
+        let frames = try await captureFixture(ProfileEditor(profile: profile, isNew: false, store: fixture),
+            to: folder.appendingPathComponent("fixed-entry-editor.png"),
+            identifiers: [toggle, helper, runtime, notice, python, pythonNotice, "profile-editor-scroll", "save-profile"])
+        if let content = frames["fixture-content"], let scroll = frames["profile-editor-scroll"],
+           let save = frames["save-profile"] {
+            checks["fixedEntryEditorShowsPathsWithinScrollingForm"] = [toggle, helper, runtime, notice, python, pythonNotice].allSatisfy { identifier in
+                guard let frame = frames[identifier] else { return false }
+                return scroll.insetBy(dx: -1, dy: -1).contains(frame)
+            }
+            checks["fixedEntryEditorKeepsSaveOutsideScrollingForm"] = content.insetBy(dx: -1, dy: -1).contains(save)
+                && scroll.maxY <= save.minY
+        } else {
+            checks["fixedEntryEditorShowsPathsWithinScrollingForm"] = false
+            checks["fixedEntryEditorKeepsSaveOutsideScrollingForm"] = false
+        }
+        checks["renderingFixedEntryEditorDoesNotConnect"] = fixture.status(for: profile.id).phase == .stopped
+            && fixture.profiles == [profile]
+        await fixture.shutdown()
+        checks.merge(try await captureFixedEntryInstallationFixtures(in: folder)) { _, result in result }
+        return checks
+    }
+
+    private func captureFixedEntryInstallationFixtures(in folder: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let result = FixedEntryInstallation(helperPath: "/tmp/catunnel-fixture-home/.catunnel/fixed-entry/17892/relay.py",
+            runtimePath: "/tmp/catunnel-fixture-home/.catunnel/fixed-entry/17892/r", port: 17892, reused: false)
+        let pythonFailure = "当前选择的远端 Python 不满足安装要求；请选择服务器上已有的 Python 3.9 或更高版本，并填写其绝对路径。应用不会升级系统 Python。"
+        let uncertainFailure = "安装连接超时；远端操作可能已经完成，可重试安装检查状态。"
+        let scenarios: [(String, FixedEntryInstallState, Bool)] = [
+            ("default-off", .idle, false), ("installing", .installing, false),
+            ("success", .succeeded(result, demo: false), true),
+            ("failed", .failed("入口端口被其他程序占用；未停止或接管该程序。"), false),
+            ("python-version-failed", .failed(pythonFailure), true),
+            ("timeout", .failed(uncertainFailure), false),
+            ("cancelled", .cancelled, true)
+        ]
+        for (name, state, enabled) in scenarios {
+            var selected = enabled
+            var helper = enabled ? result.helperPath : ""
+            var runtime = enabled ? result.runtimePath : ""
+            var python = name == "default-off" ? "" : "/tmp/fixture tools/bin/python3"
+            let originalPython = python
+            var invoked = false
+            let root = FixedEntryOptions(isOn: Binding(get: { selected }, set: { selected = $0 }),
+                helperPath: Binding(get: { helper }, set: { helper = $0 }),
+                runtimePath: Binding(get: { runtime }, set: { runtime = $0 }),
+                pythonPath: Binding(get: { python }, set: { python = $0 }),
+                installState: state, onInstall: { invoked = true }, onCancelInstall: { invoked = true })
+                .padding(18).frame(width: 320).background(Color(nsColor: .windowBackgroundColor))
+            let action = state.isInstalling ? "profile-cancel-fixed-entry-install" : "profile-install-fixed-entry"
+            var expected = ["profile-fixed-entry", "profile-fixed-entry-python", "profile-fixed-entry-python-notice",
+                            action, "profile-fixed-entry-install-notice"]
+            if state != .idle && !state.isInstalling { expected.append("profile-fixed-entry-install-result") }
+            if enabled { expected += ["profile-fixed-entry-helper", "profile-fixed-entry-runtime"] }
+            let frames = try await captureFixture(root,
+                to: folder.appendingPathComponent("fixed-entry-install-\(name).png"), identifiers: expected)
+            checks["fixedEntryInstallationLayout-\(name)"] = expected.allSatisfy { identifier in
+                guard let content = frames["fixture-content"], let frame = frames[identifier] else { return false }
+                return frame.width > 0 && frame.height > 0 && content.insetBy(dx: -1, dy: -1).contains(frame)
+            }
+            checks["fixedEntryInstallationRenderingHasNoSideEffects-\(name)"] = !invoked && selected == enabled
+                && helper == (enabled ? result.helperPath : "") && runtime == (enabled ? result.runtimePath : "")
+                && python == originalPython
+        }
+        func resultText(_ state: FixedEntryInstallState) -> String? {
+            FixedEntryInstallActions(state: state, blockedReason: nil, demoMode: false,
+                                     onInstall: {}, onCancel: {}).message?.text
+        }
+        checks["pythonVersionFailureDoesNotSuggestInstallationMayHaveSucceeded"] = resultText(.failed(pythonFailure))
+            == "\(pythonFailure) 表单设置未改变。"
+        checks["installationTimeoutKeepsCoreUncertaintyMessage"] = resultText(.failed(uncertainFailure))
+            == "\(uncertainFailure) 表单设置未改变。"
+        checks["installationCancellationStillExplainsPossibleRemoteCompletion"] = resultText(.cancelled)?
+            .contains("远端可能已完成安装，可再次点击检查。") == true
+        return checks
+    }
+
     /// Exercises the views and isolated stores without starting SSH or making proxy requests.
     private func runUICheck(reportURL: URL) async {
         var checks: [String: Bool] = [:]
@@ -551,6 +817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             checks["offlineStoreHasNoController"] = store.demoMode && store.controller == nil
+            checks.merge(checkWorkspaceSleepBridge()) { _, result in result }
             checks["startsInMenuBarWithoutWindow"] = NSApp.activationPolicy() == .accessory && window == nil
                 && statusItem != nil && popover?.behavior == .transient
             checks["rejectsMixedLiveAndOfflineArguments"] = [
@@ -700,7 +967,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             checks["reopeningKeepsSelection"] = store.selectedID == second
             popover?.performClose(nil)
             checks.merge(try await captureProfileFixtures(in: folder)) { _, result in result }
+            checks.merge(try await captureReconnectFixtures(in: folder)) { _, result in result }
             checks.merge(try await captureSetupFixtures(in: folder)) { _, result in result }
+            checks.merge(try await capturePing0Fixtures(in: folder)) { _, result in result }
+            checks.merge(try await captureForwardingRetryFixtures(in: folder)) { _, result in result }
+            checks.merge(try await captureFixedEntryFixtures(in: folder)) { _, result in result }
         } catch { failure = error.localizedDescription }
         await store.shutdown()
         checks["shutdownStopsOnlyDemoState"] = store.controller == nil && ids.allSatisfy { store.status(for: $0).phase == .stopped }

@@ -34,9 +34,11 @@ def inspect_archive(archive):
     names = set()
     total = 0
     executable = "CATunnel.app/Contents/MacOS/CATunnel"
+    installer_resources = {"CATunnel.app/Contents/Resources/FixedEntry/relay.py",
+                           "CATunnel.app/Contents/Resources/FixedEntry/install.py"}
     required = {executable, "CATunnel.app/Contents/Info.plist",
                 "CATunnel.app/Contents/Resources/AppIcon.icns",
-                "CATunnel.app/Contents/_CodeSignature/CodeResources"}
+                "CATunnel.app/Contents/_CodeSignature/CodeResources"} | installer_resources
     with zipfile.ZipFile(archive) as package:
         entries = package.infolist()
         require(0 < len(entries) <= 10000, "Archive has an unexpected number of entries.")
@@ -62,6 +64,10 @@ def inspect_archive(archive):
             require(total <= 512 * 1024 * 1024, "Archive exceeds the expanded-size limit.")
             if name == executable:
                 require(mode & stat.S_IXUSR, "App executable is missing its executable permission.")
+            if name in installer_resources:
+                require(kind in (0, stat.S_IFREG) and not entry.is_dir() and mode & stat.S_IRUSR,
+                        "Fixed-entry installer resource is not a readable regular file.")
+                require(entry.file_size > 0, "Fixed-entry installer resource is empty.")
         require(required.issubset({entry.filename for entry in entries}), "Archive is missing required app bundle files.")
         require(package.testzip() is None, "Archive has a corrupt entry.")
     return {"entries": len(entries), "expandedBytes": total}
@@ -73,6 +79,12 @@ def inspect_bundle(bundle):
         mode = item.stat().st_mode
         require(stat.S_ISREG(mode) or stat.S_ISDIR(mode), "Extracted app contains a special file.")
         require(not mode & (stat.S_ISUID | stat.S_ISGID | stat.S_IWOTH), "Extracted app has unsafe permissions.")
+    for name in ("relay.py", "install.py"):
+        resource = bundle / "Contents/Resources/FixedEntry" / name
+        require(resource.is_file() and os.access(resource, os.R_OK),
+                "Fixed-entry installer resource is missing or unreadable.")
+        with resource.open("rb") as source:
+            require(bool(source.read(1)), "Fixed-entry installer resource is empty.")
     info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
     require(info.get("CFBundleIdentifier") == "local.catunnel.CATunnel", "Unexpected bundle identifier.")
     require(info.get("CFBundleExecutable") == "CATunnel" and info.get("CFBundlePackageType") == "APPL",

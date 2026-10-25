@@ -21,7 +21,8 @@ CATUNNEL_OUTPUT_DIR="$PWD/verification/dev-build" bash scripts/build-app.sh
 ```
 
 以上命令均在仓库根目录执行。`check.sh` 运行 `TunnelCoreChecks` 离线检查程序；
-当前测试入口不是 `swift test`。它使用临时文件和本地子进程，不连接 SSH 或外部网站。
+当前测试入口不是 `swift test`。它使用临时文件、本地子进程和临时回环 TCP 服务，
+不连接 SSH 或外部网站。
 
 构建产物为 `verification/dev-build/CATunnel.app`，仅针对当前机器架构；
 构建脚本执行 ad-hoc 签名和验证，不安装或启动应用。保留以往验证产物时，
@@ -60,6 +61,19 @@ bash scripts/check-integration.sh --output "$PWD/verification/dev-integration/re
 该脚本启动临时回环 SSH 服务，使用临时密钥与独立信任文件，验证真实转发和清理。
 它不使用个人服务器、SSH agent 或代理，也不会修改日常 `known_hosts`。
 macOS 测试使用监听查询适配 Linux `ss`；通过不代表真实 Linux 部署已验证。
+
+修改固定入口安装逻辑后，运行独立安装回归：
+
+```bash
+source scripts/swift-common.sh
+swift build "${SWIFT_PACKAGE_ARGS[@]}" --product FixedEntryInstallIntegrationChecks
+python3 scripts/check-fixed-entry-install.py \
+  --binary .build/debug/FixedEntryInstallIntegrationChecks \
+  --output "$PWD/verification/dev-install/report.json"
+```
+
+该检查在本机临时 SSH 服务和独立 HOME 中验证上传、后台存活、重复安装、取消后重试及冲突拒绝。
+应用内安装资源由 `build-app.sh` 打包；直接运行 SwiftPM 可执行文件不包含这些资源。
 
 需要修改打包或 ZIP 校验逻辑时，再运行：
 

@@ -24,6 +24,15 @@ enum ProfileStoreChecks {
 
     static func run(in temporaryDirectory: URL) async throws -> [String: Bool] {
         var checks: [String: Bool] = [:]
+        let originalPythonPath = "/tmp/fixture tools/bin/python3 "
+        checks["editorPreservesUneditedRemotePythonPathExactly"] = ProfileEditor.optionalPath(originalPythonPath,
+            original: originalPythonPath) == originalPythonPath
+            && ProfileEditor.optionalPath("", original: "") == ""
+            && ProfileEditor.optionalPath("", original: nil) == nil
+        checks["editorNormalizesOnlyEditedRemotePythonPath"] = ProfileEditor.optionalPath("  /tmp/new tools/bin/python3  ",
+            original: originalPythonPath) == "/tmp/new tools/bin/python3"
+            && ProfileEditor.optionalPath("  ", original: originalPythonPath) == nil
+            && ProfileEditor.optionalPath("", original: originalPythonPath) == nil
         var stores: [TunnelStore] = []
         func makeStore(_ directory: URL, persist: Bool = true, demo: Bool = false) -> TunnelStore {
             let store = TunnelStore(persistSettings: persist, demoMode: demo, settingsDirectory: directory)
@@ -48,6 +57,7 @@ enum ProfileStoreChecks {
             && !independent.demoMode && independent.controller != nil
             && !FileManager.default.fileExists(atPath: independentDirectory.path)
         checks["unknownProfileEditsAreRejected"] = rejects { try independent.save(profile(99)) }
+            && rejects { try independent.save(profile(99), original: profile(99)) }
             && rejects { try independent.remove("missing-server") }
             && rejects { try independent.setAutoConnectOnLaunch(true, for: "missing-server") }
             && independent.profiles.isEmpty && !FileManager.default.fileExists(atPath: independentDirectory.path)
@@ -102,6 +112,173 @@ enum ProfileStoreChecks {
             && startup.status(for: profile(1).id) == activeStatus
             && startup.logs.mapValues { $0.map(\.id) } == startupLogIDs
             && startup.profiles[0].autoReconnect
+
+        let retryDirectory = temporaryDirectory.appendingPathComponent("forwarding-retry-preferences")
+        _ = try writeProfiles([profile(1), profile(2)], to: retryDirectory)
+        let retryStore = makeStore(retryDirectory)
+        let retryStoppedStates = retryStore.statuses
+        checks["continuousForwardingRetryDefaultsOff"] = !ServerProfile.draft().keepRetryingForwardingFailure
+            && ServerProfile.examples.allSatisfy { !$0.keepRetryingForwardingFailure }
+            && retryStore.profiles.allSatisfy { !$0.keepRetryingForwardingFailure }
+        var retryProfile = retryStore.profiles[0]
+        retryProfile.keepRetryingForwardingFailure = true
+        try retryStore.save(retryProfile)
+        let retryEnabledReloaded = makeStore(retryDirectory)
+        checks["continuousForwardingRetryPersistsPerServerWithoutConnecting"] = retryEnabledReloaded.profiles[0] == retryProfile
+            && !retryEnabledReloaded.profiles[1].keepRetryingForwardingFailure
+            && retryStore.statuses == retryStoppedStates && retryEnabledReloaded.statuses == retryStoppedStates
+        retryProfile.autoReconnect = false
+        try retryStore.save(retryProfile)
+        let retryDisabledReloaded = makeStore(retryDirectory)
+        checks["disablingAutoReconnectPreservesInactiveContinuousRetryPreference"] = !retryDisabledReloaded.profiles[0].autoReconnect
+            && retryDisabledReloaded.profiles[0].keepRetryingForwardingFailure
+            && retryStore.statuses == retryStoppedStates
+        let originalRetry = retryProfile
+        retryProfile.name = "Renamed with recovery preference"
+        try retryStore.save(retryProfile, original: originalRetry)
+        let retryRenamedReloaded = makeStore(retryDirectory)
+        checks["ordinaryEditorSavePreservesContinuousRetryPreference"] = retryRenamedReloaded.profiles[0] == retryProfile
+        retryProfile.keepRetryingForwardingFailure = false
+        try retryStore.save(retryProfile)
+        let retryOptOutReloaded = makeStore(retryDirectory)
+        checks["continuousForwardingRetryOptOutPersists"] = retryOptOutReloaded.profiles[0] == retryProfile
+            && !retryOptOutReloaded.profiles[0].keepRetryingForwardingFailure
+
+        let oldRetryDirectory = temporaryDirectory.appendingPathComponent("old-forwarding-retry-profile")
+        try FileManager.default.createDirectory(at: oldRetryDirectory, withIntermediateDirectories: true)
+        let oldRetryObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile(1)))
+        guard var oldRetryProfile = oldRetryObject as? [String: Any] else {
+            throw NSError(domain: "CATunnelOfflineCheck", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Profile fixture did not encode as an object"])
+        }
+        oldRetryProfile.removeValue(forKey: "keepRetryingForwardingFailure")
+        let oldRetryData = try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": [oldRetryProfile]])
+        let oldRetryURL = oldRetryDirectory.appendingPathComponent("profiles.json")
+        try oldRetryData.write(to: oldRetryURL)
+        let oldRetryStore = makeStore(oldRetryDirectory)
+        let oldRetryReadBack = try Data(contentsOf: oldRetryURL)
+        checks["olderConfigurationDefaultsContinuousRetryOffWithoutRewriting"] = oldRetryStore.configurationError == nil
+            && oldRetryStore.profiles.count == 1 && !oldRetryStore.profiles[0].keepRetryingForwardingFailure
+            && oldRetryReadBack == oldRetryData
+
+        let fixedDirectory = temporaryDirectory.appendingPathComponent("fixed-entry-preferences")
+        _ = try writeProfiles([profile(1), profile(2)], to: fixedDirectory)
+        let fixedStore = makeStore(fixedDirectory)
+        fixedStore.controller?.onEvent?(.status(id: profile(2).id, status: activeStatus))
+        let fixedStates = fixedStore.statuses
+        var fixedProfile = fixedStore.profiles[0]
+        fixedProfile.useFixedEntry = true
+        fixedProfile.fixedEntryHelperPath = "/opt/fixture relay/relay.py"
+        fixedProfile.fixedEntryRuntimePath = "/run/user/1000/fixture-entry"
+        fixedProfile.fixedEntryPythonPath = "/tmp/fixture tools/bin/python3"
+        try fixedStore.save(fixedProfile, original: profile(1))
+        let fixedReloaded = makeStore(fixedDirectory)
+        checks["fixedEntrySavePersistsWithoutConnectingOrChangingAnotherSession"] = fixedReloaded.profiles == fixedStore.profiles
+            && fixedStore.profiles[0] == fixedProfile && fixedStore.profiles[1] == profile(2)
+            && fixedStore.statuses == fixedStates && fixedReloaded.statuses.values.allSatisfy { $0.phase == .stopped }
+        checks["fixedEntryPythonSelectionPersistsOnExplicitSave"] = fixedReloaded.profiles[0].fixedEntryPythonPath
+            == "/tmp/fixture tools/bin/python3" && fixedStore.statuses == fixedStates
+        fixedProfile.useFixedEntry = false
+        try fixedStore.save(fixedProfile)
+        let fixedDisabled = makeStore(fixedDirectory)
+        checks["disablingFixedEntryKeepsPathsAndUnrelatedOptions"] = fixedDisabled.profiles[0] == fixedProfile
+            && !fixedDisabled.profiles[0].useFixedEntry && fixedDisabled.profiles[0].fixedEntryHelperPath != nil
+            && fixedDisabled.profiles[0].fixedEntryPythonPath == "/tmp/fixture tools/bin/python3"
+            && fixedStore.statuses == fixedStates && fixedDisabled.profiles[1] == profile(2)
+        let beforeInvalidFixed = try Data(contentsOf: fixedDirectory.appendingPathComponent("profiles.json"))
+        var invalidFixed = fixedProfile
+        invalidFixed.useFixedEntry = true
+        invalidFixed.fixedEntryRuntimePath = nil
+        let refusedInvalidFixed = rejects { try fixedStore.save(invalidFixed) }
+        let afterInvalidFixed = try Data(contentsOf: fixedDirectory.appendingPathComponent("profiles.json"))
+        checks["invalidFixedEntrySaveIsAtomic"] = refusedInvalidFixed && fixedStore.profiles[0] == fixedProfile
+            && fixedStore.statuses == fixedStates && beforeInvalidFixed == afterInvalidFixed
+
+        let oldFixedDirectory = temporaryDirectory.appendingPathComponent("old-fixed-entry-profile")
+        try FileManager.default.createDirectory(at: oldFixedDirectory, withIntermediateDirectories: true)
+        var oldFixedProfile = oldRetryProfile
+        for key in ["useFixedEntry", "fixedEntryHelperPath", "fixedEntryRuntimePath", "fixedEntryPythonPath"] {
+            oldFixedProfile.removeValue(forKey: key)
+        }
+        let oldFixedData = try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": [oldFixedProfile]])
+        let oldFixedURL = oldFixedDirectory.appendingPathComponent("profiles.json")
+        try oldFixedData.write(to: oldFixedURL)
+        let oldFixedStore = makeStore(oldFixedDirectory)
+        let oldFixedReadBack = try Data(contentsOf: oldFixedURL)
+        checks["olderConfigurationDefaultsFixedEntryOffWithoutRewriting"] = oldFixedStore.configurationError == nil
+            && oldFixedStore.profiles == [profile(1)] && oldFixedReadBack == oldFixedData
+
+        let oldPythonDirectory = temporaryDirectory.appendingPathComponent("old-fixed-entry-python-profile")
+        try FileManager.default.createDirectory(at: oldPythonDirectory, withIntermediateDirectories: true)
+        let oldPythonObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fixedProfile))
+        guard var oldPythonProfile = oldPythonObject as? [String: Any] else {
+            throw NSError(domain: "CATunnelOfflineCheck", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Profile fixture did not encode as an object"])
+        }
+        oldPythonProfile["useFixedEntry"] = true
+        oldPythonProfile.removeValue(forKey: "fixedEntryPythonPath")
+        let oldPythonData = try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": [oldPythonProfile]])
+        let oldPythonURL = oldPythonDirectory.appendingPathComponent("profiles.json")
+        try oldPythonData.write(to: oldPythonURL)
+        let oldPythonStore = makeStore(oldPythonDirectory)
+        var expectedOldPython = fixedProfile
+        expectedOldPython.useFixedEntry = true
+        expectedOldPython.fixedEntryPythonPath = nil
+        checks["existingFixedEntryWithoutPythonSelectionLoadsWithoutRewriting"] = oldPythonStore.configurationError == nil
+            && oldPythonStore.profiles == [expectedOldPython] && (try? Data(contentsOf: oldPythonURL)) == oldPythonData
+
+        let editorDirectory = temporaryDirectory.appendingPathComponent("editor-startup-preferences")
+        _ = try writeProfiles([profile(1), profile(2)], to: editorDirectory)
+        let editorStore = makeStore(editorDirectory)
+        let editorStoppedStates = editorStore.statuses
+        for enabled in [true, false] {
+            let original = editorStore.profiles[0]
+            var renamed = original
+            renamed.name = "Renamed while startup is \(enabled)"
+            try editorStore.setAutoConnectOnLaunch(enabled, for: original.id)
+            try editorStore.save(renamed, original: original)
+            let loaded = makeStore(editorDirectory)
+            checks["editorPreservesExternalStartupChange-\(enabled)"] = editorStore.profiles[0].autoConnectOnLaunch == enabled
+                && editorStore.profiles[0].name == renamed.name && loaded.profiles == editorStore.profiles
+                && editorStore.profiles[1] == profile(2) && editorStore.statuses == editorStoppedStates
+        }
+        for enabled in [true, false] {
+            let original = editorStore.profiles[0]
+            var changed = original
+            changed.autoConnectOnLaunch = enabled
+            try editorStore.save(changed, original: original)
+            let loaded = makeStore(editorDirectory)
+            checks["editorExplicitStartupChangePersists-\(enabled)"] = editorStore.profiles[0] == changed
+                && loaded.profiles == editorStore.profiles && editorStore.statuses == editorStoppedStates
+        }
+        for originalValue in [false, true] {
+            try editorStore.setAutoConnectOnLaunch(originalValue, for: profile(1).id)
+            let original = editorStore.profiles[0]
+            try editorStore.setAutoConnectOnLaunch(!originalValue, for: original.id)
+            var roundTrip = original
+            roundTrip.autoConnectOnLaunch.toggle()
+            roundTrip.autoConnectOnLaunch.toggle()
+            try editorStore.save(roundTrip, original: original, autoConnectOnLaunchEdited: true)
+            let loaded = makeStore(editorDirectory)
+            checks["editorExplicitRoundTripStartupChangePersists-\(originalValue)"] = editorStore.profiles[0] == roundTrip
+                && loaded.profiles == editorStore.profiles && editorStore.statuses == editorStoppedStates
+        }
+        let originalEditorProfile = editorStore.profiles[0]
+        var ordinaryEdit = originalEditorProfile
+        ordinaryEdit.name = "Ordinary editor save"
+        ordinaryEdit.localPort = 8899
+        try editorStore.save(ordinaryEdit, original: originalEditorProfile)
+        let ordinaryReloaded = makeStore(editorDirectory)
+        checks["editorWithoutConcurrentChangesPersistsNormally"] = editorStore.profiles[0] == ordinaryEdit
+            && ordinaryReloaded.profiles == editorStore.profiles
+        let beforeMismatch = editorStore.profiles
+        let beforeMismatchData = try Data(contentsOf: editorDirectory.appendingPathComponent("profiles.json"))
+        var rejectedMismatch = false
+        do { try editorStore.save(editorStore.profiles[0], original: editorStore.profiles[1]) }
+        catch StoreError.mismatchedOriginalProfile { rejectedMismatch = true }
+        let afterMismatchData = try Data(contentsOf: editorDirectory.appendingPathComponent("profiles.json"))
+        checks["editorRejectsMismatchedOriginalWithoutWriting"] = rejectedMismatch
+            && editorStore.profiles == beforeMismatch && beforeMismatchData == afterMismatchData
         checks["SSHIdentityAndRiskConsentPersistPerProfile"] = reloaded.profiles[4].identityFile == edited.identityFile
             && reloaded.profiles[4].assessIPRisk && reloaded.profiles[0].identityFile == nil
             && !reloaded.profiles[0].assessIPRisk
@@ -232,8 +409,18 @@ enum ProfileStoreChecks {
         try blocker.write(to: failingDirectory)
         var failedEdit = fixtureProfiles[0]
         failedEdit.name = "This change cannot be persisted"
+        failedEdit.keepRetryingForwardingFailure = true
+        failedEdit.useFixedEntry = true
+        failedEdit.fixedEntryHelperPath = "/opt/catunnel/relay.py"
+        failedEdit.fixedEntryRuntimePath = "/run/user/1000/catunnel"
+        var failedStartupEdit = failedEdit
+        failedStartupEdit.autoConnectOnLaunch.toggle()
         let failures = failsWriting { try failing.add(profile(10)) }
             && failsWriting { try failing.save(failedEdit) }
+            && failsWriting { try failing.save(failedEdit, original: fixtureProfiles[0]) }
+            && failsWriting {
+                try failing.save(failedStartupEdit, original: fixtureProfiles[0], autoConnectOnLaunchEdited: true)
+            }
             && failsWriting { try failing.remove(profile(2).id) }
             && failsWriting { try failing.setAutoConnectOnLaunch(true, for: profile(1).id) }
         let blockerAfter = try Data(contentsOf: failingDirectory)
@@ -242,19 +429,91 @@ enum ProfileStoreChecks {
             && failing.statuses == beforeFailureStatuses && failing.logs.mapValues { $0.map(\.id) } == beforeFailureLogIDs
             && failing.selectedID == profile(2).id && blockerAfter == blocker && originalAfter == beforeFailureData
 
+        let providerDirectory = temporaryDirectory.appendingPathComponent("independent-ip-providers")
+        let providers = makeStore(providerDirectory)
+        var providerProfile = profile(30)
+        checks["ping0DefaultsOffIndependentlyOfOtherPreferences"] = !providerProfile.assessPing0
+            && !providerProfile.assessIPRisk && !providerProfile.autoConnectOnLaunch
+        providerProfile.assessPing0 = true
+        try providers.add(providerProfile)
+        let ping0Reloaded = makeStore(providerDirectory)
+        checks["ping0OnlyConsentPersistsWithoutEnablingOtherPreferences"] = ping0Reloaded.profiles == [providerProfile]
+            && ping0Reloaded.profiles[0].assessPing0 && !ping0Reloaded.profiles[0].assessIPRisk
+            && !ping0Reloaded.profiles[0].autoConnectOnLaunch
+        providerProfile.assessIPRisk = true
+        try providers.save(providerProfile)
+        let bothReloaded = makeStore(providerDirectory)
+        checks["bothProviderConsentsPersistIndependently"] = bothReloaded.profiles == [providerProfile]
+            && bothReloaded.profiles[0].assessIPRisk && bothReloaded.profiles[0].assessPing0
+
+        let websiteDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let ping0Date = websiteDate.addingTimeInterval(4)
+        let fixtureIP = "198.51.100.30"
+        var providerStatus = TunnelStatus(phase: .connected, proxyCheck: .passed,
+            websiteResults: WebsiteTarget.allCases.map {
+                .init(target: $0, state: .passed, message: "Offline fixture", checkedAt: websiteDate)
+            },
+            ipRisk: .init(state: .failed, message: "Offline provider failure", checkedAt: websiteDate),
+            ping0: .init(state: .checking, message: "Offline provider pending"))
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
+        checks["completedHistoryWaitsForEnabledPing0"] = providers.lastCompletedCheckAt(for: providerProfile.id) == nil
+        providerStatus.ping0 = .init(state: .available, message: "Offline Ping0 result",
+            assessment: .init(ip: fixtureIP, ipType: "机房 IP", riskValue: 12, sharedUsers: "1 - 10 (极好)"),
+            ip: fixtureIP, checkedAt: ping0Date)
+        providerStatus.ipRisk = .init(state: .checking, message: "Offline provider pending")
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
+        checks["completedHistoryAlsoWaitsForEnabledNetCoffee"] = providers.lastCompletedCheckAt(for: providerProfile.id) == nil
+        providerStatus.ipRisk = .init(state: .failed, message: "Offline provider failure", checkedAt: websiteDate)
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
+        checks["providerFailureStillCompletesHistoryWithLatestTimestamp"] = providers.lastCompletedCheckAt(for: providerProfile.id) == ping0Date
+            && providers.status(for: providerProfile.id).ping0.assessment?.riskValue == 12
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: .stopped))
+        checks["disconnectedHistoryPreservesIndependentPing0Result"] = providers.isShowingHistoricalResults(for: providerProfile.id)
+            && providers.presentationStatus(for: providerProfile.id).ping0 == providerStatus.ping0
+            && providers.presentationStatus(for: providerProfile.id).ipRisk.state == .failed
+        var pendingStatus = providerStatus
+        pendingStatus.proxyCheck = .checking
+        pendingStatus.ping0 = .init(state: .checking, message: "Offline new request")
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: pendingStatus))
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: .stopped))
+        checks["interruptedProviderCheckKeepsPreviousCompletedHistory"] = providers.lastCompletedCheckAt(for: providerProfile.id) == ping0Date
+            && providers.presentationStatus(for: providerProfile.id).ping0 == providerStatus.ping0
+        providerProfile.assessPing0 = false
+        try providers.save(providerProfile)
+        let disabledReloaded = makeStore(providerDirectory)
+        checks["disablingPing0ClearsItsHistoryWithoutDisablingNetCoffee"] = !disabledReloaded.profiles[0].assessPing0
+            && disabledReloaded.profiles[0].assessIPRisk && providers.lastCompletedCheckAt(for: providerProfile.id) == nil
+            && providers.presentationStatus(for: providerProfile.id).ping0.assessment == nil
+        providerStatus.ping0 = .init()
+        providers.controller?.onEvent?(.status(id: providerProfile.id, status: providerStatus))
+        checks["disabledPing0DoesNotBlockLegacyCompletedFixtures"] = providers.lastCompletedCheckAt(for: providerProfile.id) == websiteDate
+
         let isolatedDirectory = temporaryDirectory.appendingPathComponent("demo-must-not-write")
         let demo = makeStore(isolatedDirectory, demo: true)
         let active = demo.profiles[0]
         let stopped = demo.profiles[1]
         let demoProfiles = demo.profiles
-        checks["demoDefaultsSkipRiskAndRetainNetworkEvidence"] = demo.profiles.allSatisfy { !$0.assessIPRisk }
+        checks["demoDefaultsSkipRiskAndRetainNetworkEvidence"] = demo.profiles.allSatisfy { !$0.assessIPRisk && !$0.assessPing0 }
             && demo.status(for: active.id).proxyCheck == .passed
             && demo.status(for: active.id).ipRisk.state == .skipped
             && demo.status(for: active.id).ipRisk.assessment == nil
             && demo.status(for: active.id).ipRisk.ip == "198.51.100.10"
+            && demo.status(for: active.id).ping0.state == .skipped
+            && demo.status(for: active.id).ping0.assessment == nil
             && demo.lastCompletedCheckAt(for: active.id) != nil
         checks["connectedProfileCannotBeEditedOrDeleted"] = !demo.canModify(active.id)
             && rejects { try demo.save(active) } && rejects { try demo.remove(active.id) }
+            && rejects { try demo.save(active, original: active) }
+            && demo.profiles == demoProfiles && demo.status(for: active.id).phase == .connected
+        var activeFixedEdit = active
+        activeFixedEdit.useFixedEntry = true
+        activeFixedEdit.fixedEntryHelperPath = "/opt/catunnel/relay.py"
+        activeFixedEdit.fixedEntryRuntimePath = "/run/user/1000/catunnel"
+        checks["connectedProfileCannotChangeFixedEntryMode"] = rejects { try demo.save(activeFixedEdit, original: active) }
+            && demo.profiles == demoProfiles && demo.status(for: active.id).phase == .connected
+        var activePythonEdit = active
+        activePythonEdit.fixedEntryPythonPath = "/tmp/fixture tools/bin/python3"
+        checks["connectedProfileCannotChangeRemotePython"] = rejects { try demo.save(activePythonEdit, original: active) }
             && demo.profiles == demoProfiles && demo.status(for: active.id).phase == .connected
         let activeBeforeStartupChange = demo.status(for: active.id)
         let historyBeforeStartupChange = demo.lastCompletedCheckAt(for: active.id)
@@ -266,6 +525,7 @@ enum ProfileStoreChecks {
         demo.start(stopped.id)
         checks["connectingProfileCannotBeEditedOrDeleted"] = demo.status(for: stopped.id).phase == .connecting
             && !demo.canModify(stopped.id) && rejects { try demo.save(stopped) } && rejects { try demo.remove(stopped.id) }
+            && rejects { try demo.save(stopped, original: stopped) }
         demo.stop(stopped.id)
         demo.stop(active.id)
         checks["skippedRiskCompletedCheckSurvivesDisconnectAsHistory"] = demo.isShowingHistoricalResults(for: active.id)
@@ -274,6 +534,7 @@ enum ProfileStoreChecks {
         var changedDemo = active
         changedDemo.name = "Edited demo"
         changedDemo.assessIPRisk = true
+        changedDemo.assessPing0 = true
         try demo.save(changedDemo)
         checks["editingStoppedProfileClearsHistoricalResults"] = demo.canModify(active.id)
             && demo.lastCompletedCheckAt(for: active.id) == nil && !demo.isShowingHistoricalResults(for: active.id)
@@ -284,6 +545,10 @@ enum ProfileStoreChecks {
         checks["demoExplicitConsentProducesOnlySimulatedRiskScore"] = demo.status(for: active.id).ipRisk.state == .available
             && demo.status(for: active.id).ipRisk.assessment?.trustScore == 89
             && demo.status(for: active.id).proxyCheck == .passed && demo.controller == nil
+        checks["demoBothProvidersKeepTheirOwnValues"] = demo.status(for: active.id).ping0.state == .available
+            && demo.status(for: active.id).ping0.assessment?.riskValue == 12
+            && demo.status(for: active.id).ping0.assessment?.sharedUsers == "1 - 10 (极好)"
+            && demo.status(for: active.id).ipRisk.assessment?.trustScore == 89
         demo.stop(active.id)
         changedDemo.assessIPRisk = false
         try demo.save(changedDemo)
@@ -297,6 +562,19 @@ enum ProfileStoreChecks {
             && demo.status(for: active.id).ipRisk.assessment == nil
             && demo.status(for: active.id).websiteResults.allSatisfy { $0.state == .passed }
             && demo.status(for: active.id).proxyCheck == .passed && demo.lastCompletedCheckAt(for: active.id) != nil
+        checks["demoPing0OnlyConsentDoesNotEnableNetCoffee"] = demo.status(for: active.id).ping0.state == .available
+            && demo.status(for: active.id).ping0.assessment?.ip == "198.51.100.10"
+            && demo.status(for: active.id).ipRisk.state == .skipped && demo.controller == nil
+        let completedPing0 = demo.status(for: active.id).ping0
+        let completedPing0Date = demo.lastCompletedCheckAt(for: active.id)
+        demo.testProxy(active.id)
+        let ping0WasChecking = demo.status(for: active.id).ping0.state == .checking
+        demo.stop(active.id)
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+        checks["cancelledPing0DemoCannotReplaceCompletedHistory"] = ping0WasChecking
+            && demo.status(for: active.id).phase == .stopped && demo.status(for: active.id).ping0.assessment == nil
+            && demo.lastCompletedCheckAt(for: active.id) == completedPing0Date
+            && demo.presentationStatus(for: active.id).ping0 == completedPing0
         demo.stop(active.id)
         try demo.remove(active.id)
         try demo.add(profile(10))
@@ -310,7 +588,250 @@ enum ProfileStoreChecks {
         checks["demoCRUDNeverWritesOrCreatesController"] = demo.controller == nil
             && !FileManager.default.fileExists(atPath: isolatedDirectory.path)
 
+        checks.merge(try await installationChecks(in: temporaryDirectory.appendingPathComponent("installation"))) { _, value in value }
         for store in stores { await store.shutdown() }
         return checks
     }
+
+    private static func installationChecks(in directory: URL) async throws -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let store = TunnelStore(persistSettings: true, settingsDirectory: directory)
+        var original = profile(61)
+        original.fixedEntryHelperPath = "/previous/manual/relay.py"
+        original.fixedEntryRuntimePath = "/previous/manual/runtime"
+        original.fixedEntryPythonPath = "/tmp/fixture tools/bin/python3"
+        original.keepRetryingForwardingFailure = true
+        original.assessPing0 = true
+        try store.add(original)
+        try store.add(profile(62))
+        store.controller?.onEvent?(.status(id: profile(62).id,
+            status: TunnelStatus(phase: .connected, message: "Unrelated fixture connection", connectedAt: Date())))
+        let beforeProfiles = store.profiles
+        let beforeStatuses = store.statuses
+        let configURL = directory.appendingPathComponent("profiles.json")
+        let beforeBytes = try Data(contentsOf: configURL)
+        var draft = original
+        let result = FixedEntryInstallation(helperPath: "/tmp/catunnel-fixture-home/.catunnel/fixed-entry/17892/relay.py",
+            runtimePath: "/tmp/catunnel-fixture-home/.catunnel/fixed-entry/17892/r", port: original.remotePort, reused: false)
+        let executor = InstallFixtureExecutor()
+        let model = FixedEntryInstallModel(makeExecutor: { executor })
+        model.start(profile: draft, demoMode: false) { installed in
+            draft.useFixedEntry = true
+            draft.fixedEntryHelperPath = installed.helperPath
+            draft.fixedEntryRuntimePath = installed.runtimePath
+        }
+        await executor.waitForRequest()
+        checks["installationStartsWithoutChangingDraftOrPersistedProfiles"] = model.isInstalling
+            && executor.profiles == [original] && draft == original && store.profiles == beforeProfiles
+            && store.statuses == beforeStatuses && (try? Data(contentsOf: configURL)) == beforeBytes
+        checks["installationUsesSelectedPythonWithFixedEntryStillOff"] = !original.useFixedEntry
+            && executor.profiles.first?.fixedEntryPythonPath == original.fixedEntryPythonPath
+        var repeatedCallbacks = 0
+        model.start(profile: draft, demoMode: false) { _ in repeatedCallbacks += 1 }
+        checks["installationRejectsDuplicateClicksWhileBusy"] = executor.profiles.count == 1 && repeatedCallbacks == 0
+        executor.finish(.success(result))
+        await settle { !model.isInstalling }
+        checks["installationSuccessOnlyFillsDraftUntilExplicitSave"] = model.state == .succeeded(result, demo: false)
+            && draft.useFixedEntry && draft.fixedEntryHelperPath == result.helperPath
+            && draft.fixedEntryRuntimePath == result.runtimePath && draft.keepRetryingForwardingFailure
+            && draft.fixedEntryPythonPath == original.fixedEntryPythonPath
+            && draft.assessPing0 && store.profiles == beforeProfiles && store.statuses == beforeStatuses
+            && (try? Data(contentsOf: configURL)) == beforeBytes
+        try store.save(draft, original: original)
+        let saved = try ServerConfiguration.decode(Data(contentsOf: configURL))
+        checks["installationExplicitSaveKeepsOtherConnectionsAndChoices"] = saved.profiles == [draft, profile(62)]
+            && store.statuses == beforeStatuses && draft.autoReconnect == original.autoReconnect
+            && draft.autoConnectOnLaunch == original.autoConnectOnLaunch && draft.localPort == original.localPort
+            && saved.profiles[0].fixedEntryPythonPath == original.fixedEntryPythonPath
+        let afterSave = draft
+        let savedBytes = try Data(contentsOf: configURL)
+        let failed = InstallFixtureExecutor()
+        let failedModel = FixedEntryInstallModel(makeExecutor: { failed })
+        failedModel.start(profile: draft, demoMode: false) { _ in draft.name = "Unexpected callback" }
+        await failed.waitForRequest()
+        failed.finish(.failure(InstallFixtureError()))
+        await settle { !failedModel.isInstalling }
+        checks["installationFailurePreservesManualSettingsAndConfiguration"] = failedModel.state == .failed(InstallFixtureError().localizedDescription)
+            && draft == afterSave && store.profiles == saved.profiles && store.statuses == beforeStatuses
+            && (try? Data(contentsOf: configURL)) == savedBytes
+        checks["installationFailurePreservesSelectedPython"] = failed.profiles.first?.fixedEntryPythonPath
+            == original.fixedEntryPythonPath && draft.fixedEntryPythonPath == original.fixedEntryPythonPath
+
+        let cancelled = InstallFixtureExecutor()
+        let cancelModel = FixedEntryInstallModel(makeExecutor: { cancelled })
+        var cancelCallbacks = 0
+        cancelModel.start(profile: original, demoMode: false) { _ in cancelCallbacks += 1 }
+        await cancelled.waitForRequest()
+        cancelModel.cancel()
+        cancelled.finish(.success(result))
+        await settle { cancelled.finished }
+        checks["cancelledInstallationIgnoresLateSuccess"] = cancelled.cancellations == 1
+            && cancelModel.state == .cancelled && cancelCallbacks == 0 && draft == afterSave
+        checks["cancelledInstallationPreservesSelectedPython"] = cancelled.profiles.first?.fixedEntryPythonPath
+            == original.fixedEntryPythonPath && draft.fixedEntryPythonPath == original.fixedEntryPythonPath
+
+        let oldExecutor = InstallFixtureExecutor(), newExecutor = InstallFixtureExecutor()
+        var executorIndex = 0
+        let generationModel = FixedEntryInstallModel(makeExecutor: {
+            executorIndex += 1
+            return executorIndex == 1 ? oldExecutor : newExecutor
+        })
+        var completions: [FixedEntryInstallation] = []
+        generationModel.start(profile: original, demoMode: false) { completions.append($0) }
+        await oldExecutor.waitForRequest()
+        generationModel.cancel(clearState: true)
+        var changed = original
+        changed.remotePort += 1
+        changed.fixedEntryPythonPath = "/tmp/other fixture/bin/python3"
+        let newer = FixedEntryInstallation(helperPath: result.helperPath,
+            runtimePath: result.runtimePath + "-new", port: changed.remotePort, reused: true)
+        generationModel.start(profile: changed, demoMode: false) { completions.append($0) }
+        await newExecutor.waitForRequest()
+        oldExecutor.finish(.failure(InstallFixtureError()))
+        await settle { oldExecutor.finished }
+        let oldIgnored = generationModel.isInstalling && completions.isEmpty
+        newExecutor.finish(.success(newer))
+        await settle { !generationModel.isInstalling }
+        checks["changedInputsPreventOldInstallationFromOverwritingNewAttempt"] = oldIgnored
+            && generationModel.state == .succeeded(newer, demo: false) && completions == [newer]
+        checks["changingPythonUsesNewSelectionWithoutOldAttemptOverwrite"] = oldIgnored
+            && newExecutor.profiles.first?.fixedEntryPythonPath == changed.fixedEntryPythonPath
+            && oldExecutor.profiles.first?.fixedEntryPythonPath == original.fixedEntryPythonPath
+            && completions == [newer] && store.profiles == saved.profiles
+
+        var creationCount = 0
+        let invalidModel = FixedEntryInstallModel(makeExecutor: {
+            creationCount += 1
+            throw InstallFixtureError()
+        })
+        var invalid = original
+        invalid.remotePort = 0
+        invalidModel.start(profile: invalid, demoMode: false) { _ in creationCount += 100 }
+        checks["invalidInstallationInputNeverCreatesExecutor"] = creationCount == 0 && !invalidModel.isInstalling
+            && invalidModel.state == .failed(ProfileValidationError.invalidPort.localizedDescription)
+        invalidModel.start(profile: original, demoMode: false) { _ in creationCount += 100 }
+        checks["missingInstallationResourcesLeaveDraftUntouched"] = creationCount == 1
+            && invalidModel.state == .failed(InstallFixtureError().localizedDescription) && draft == afterSave
+
+        let noPaths = InstallFixtureExecutor()
+        let pathsModel = FixedEntryInstallModel(makeExecutor: { noPaths })
+        var manual = original
+        manual.useFixedEntry = true
+        manual.fixedEntryHelperPath = nil
+        manual.fixedEntryRuntimePath = nil
+        pathsModel.start(profile: manual, demoMode: false) { _ in }
+        await noPaths.waitForRequest()
+        checks["installationDoesNotRequirePreviouslyInstalledManualPaths"] = noPaths.profiles.count == 1
+            && noPaths.profiles.first?.useFixedEntry == false && pathsModel.isInstalling
+        pathsModel.cancel()
+        noPaths.finish(.failure(InstallFixtureError()))
+        await settle { noPaths.finished }
+
+        var offlineCreations = 0
+        let offline = FixedEntryInstallModel(makeExecutor: {
+            offlineCreations += 1
+            throw InstallFixtureError()
+        })
+        var offlineResult: FixedEntryInstallation?
+        offline.start(profile: original, demoMode: true) { offlineResult = $0 }
+        await settle { !offline.isInstalling }
+        checks["offlineInstallationNeverConstructsRealExecutorOrWritesSettings"] = offlineCreations == 0
+            && offlineResult?.port == original.remotePort && store.profiles == saved.profiles
+            && store.statuses == beforeStatuses && (try? Data(contentsOf: configURL)) == savedBytes
+        var offlineCallbacks = 0
+        offline.start(profile: original, demoMode: true) { _ in offlineCallbacks += 1 }
+        offline.cancel()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        checks["closingEditorCancelsOfflineInstallationWithoutLateAutofill"] = offline.state == .cancelled
+            && offlineCallbacks == 0 && offlineCreations == 0
+        let unavailablePhases: [TunnelPhase] = [.connected, .connecting, .checking, .reconnecting, .failed]
+        checks["installationRequiresStoppedProfileAndNoDiagnostics"] = unavailablePhases
+            .allSatisfy { FixedEntryInstallModel.blockedReason(editorReason: nil, phase: $0, checking: false) != nil }
+            && FixedEntryInstallModel.blockedReason(editorReason: nil, phase: .stopped, checking: false) == nil
+            && FixedEntryInstallModel.blockedReason(editorReason: nil, phase: nil, checking: false) == nil
+            && FixedEntryInstallModel.blockedReason(editorReason: nil, phase: .stopped, checking: true) != nil
+            && FixedEntryInstallModel.blockedReason(editorReason: "Protected configuration", phase: .stopped, checking: false) == "Protected configuration"
+
+        var guardedCreations = 0
+        let guardedModel = FixedEntryInstallModel(makeExecutor: {
+            guardedCreations += 1
+            throw InstallFixtureError()
+        })
+        func guardedStart(_ candidate: ServerProfile, isNew: Bool,
+                          existing: [ServerProfile]) -> Bool {
+            do {
+                let validated = try FixedEntryInstallModel.validateCandidate(candidate,
+                    isNew: isNew, existingProfiles: existing)
+                guardedModel.start(profile: validated, demoMode: false) { _ in guardedCreations += 100 }
+                return true
+            } catch { return false }
+        }
+        var duplicateNew = profile(63)
+        duplicateNew.host = original.host
+        duplicateNew.user = "anotheruser"
+        checks["installationRejectsNewDraftUsingExistingServerPort"] = !guardedStart(duplicateNew,
+            isNew: true, existing: store.profiles) && guardedCreations == 0 && guardedModel.state == .idle
+        var duplicateEdit = original
+        duplicateEdit.host = profile(62).host
+        checks["installationRejectsEditedDraftUsingAnotherServerPort"] = !guardedStart(duplicateEdit,
+            isNew: false, existing: store.profiles) && guardedCreations == 0 && guardedModel.state == .idle
+        var validEdit = original
+        validEdit.name = "Valid installation draft"
+        validEdit.remotePort += 2
+        let validatedEdit = try FixedEntryInstallModel.validateCandidate(validEdit,
+            isNew: false, existingProfiles: store.profiles)
+        checks["installationAllowsValidReplacementOfSameProfileID"] = validatedEdit == validEdit
+            && store.profiles == saved.profiles && store.statuses == beforeStatuses
+        let unknown = profile(64)
+        checks["installationRejectsDeletedProfileBeforeCreatingExecutor"] = !guardedStart(unknown,
+            isNew: false, existing: store.profiles) && guardedCreations == 0
+        checks["installationValidatesEntireCandidateConfiguration"] = !guardedStart(unknown,
+            isNew: true, existing: store.profiles + [original]) && guardedCreations == 0
+        checks["installationPreflightFailuresPreserveConfigurationAndSessions"] = guardedModel.state == .idle
+            && store.profiles == saved.profiles && store.statuses == beforeStatuses
+            && (try? Data(contentsOf: configURL)) == savedBytes
+        await store.shutdown()
+        return checks
+    }
+
+    private static func settle(until condition: () -> Bool) async {
+        for _ in 0..<200 {
+            if condition() { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await Task.yield()
+    }
+}
+
+@MainActor
+private final class InstallFixtureExecutor: FixedEntryInstallExecuting {
+    private(set) var profiles: [ServerProfile] = []
+    private(set) var cancellations = 0
+    private(set) var finished = false
+    private var continuation: CheckedContinuation<FixedEntryInstallation, Error>?
+
+    func install(_ profile: ServerProfile) async throws -> FixedEntryInstallation {
+        profiles.append(profile)
+        defer { finished = true }
+        return try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+
+    func cancel() { cancellations += 1 }
+
+    func finish(_ result: Result<FixedEntryInstallation, Error>) {
+        let pending = continuation
+        continuation = nil
+        pending?.resume(with: result)
+    }
+
+    func waitForRequest() async {
+        for _ in 0..<100 {
+            if continuation != nil { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+}
+
+private struct InstallFixtureError: LocalizedError {
+    var errorDescription: String? { "离线安装失败示例：入口端口被其他程序占用。" }
 }

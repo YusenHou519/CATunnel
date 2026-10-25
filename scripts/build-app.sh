@@ -15,6 +15,11 @@ cp "$BIN_DIRECTORY/CATunnel" "$APP_BUNDLE/Contents/MacOS/CATunnel.next"
 mv -f "$APP_BUNDLE/Contents/MacOS/CATunnel.next" "$APP_BUNDLE/Contents/MacOS/CATunnel"
 chmod 755 "$APP_BUNDLE/Contents/MacOS/CATunnel"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+mkdir -p "$APP_BUNDLE/Contents/Resources/FixedEntry"
+for script in relay.py install.py; do
+  cp "$PROJECT_ROOT/experimental/fixed_entry/$script" "$APP_BUNDLE/Contents/Resources/FixedEntry/$script"
+  chmod 644 "$APP_BUNDLE/Contents/Resources/FixedEntry/$script"
+done
 
 swift "$PROJECT_ROOT/scripts/create-icon.swift" "$PROJECT_ROOT/.build/AppIcon.iconset"
 /usr/bin/iconutil -c icns "$PROJECT_ROOT/.build/AppIcon.iconset" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"

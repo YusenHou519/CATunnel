@@ -25,6 +25,7 @@ struct CheckRunner {
             ("portable example profiles and blank drafts", examples),
             ("server configuration round trip and versioning", configuration),
             ("startup connection preferences and legacy compatibility", startupPreferences),
+            ("optional persistent forwarding recovery and legacy compatibility", persistentRecoveryPreferences),
             ("duplicate server identity and listener rejection", duplicateConfiguration),
             ("example profiles fail before connection startup", exampleStart),
             ("input validation and injection rejection", validation),
@@ -48,13 +49,16 @@ struct CheckRunner {
             ("risk progress model, Codable and reset", riskModelReset),
             ("optional risk consent gates third-party requests", RiskOptionChecks.run),
             ("permanent versus transient failures", failureClassification),
+            ("bounded forwarding retries only after a confirmed connection", forwardingRetryPolicy),
+            ("opted-in forwarding recovery continues with bounded delays", persistentForwardingRetryPolicy),
             ("credential-safe logs", safeLogs),
             ("private short socket directory and buffer lifetime", socketDirectory),
             ("owned child timeout and exit synchronization", childLifecycle),
             ("parallel owned probes terminate independently", parallelChildCleanup),
             ("response capture is bounded and reports truncation", boundedCapture),
             ("invalid start and idempotent stop", invalidStart)
-        ] + SetupChecks.checks
+        ] + SetupChecks.checks + Ping0Checks.checks + FixedEntryProfileChecks.checks
+            + FixedEntryGatewayChecks.checks + FixedEntryCoreChecks.checks + FixedEntryInstallerChecks.checks
         var failures = 0
         for (name, check) in checks {
             do { try await check(); print("PASS: \(name)") }
@@ -185,6 +189,36 @@ struct CheckRunner {
         duplicateEndpoint.remotePort = first.remotePort
         duplicateEndpoint.sshPort += 1
         try ServerConfiguration(profiles: [first, duplicateEndpoint]).validate()
+    }
+
+    static func persistentRecoveryPreferences() throws {
+        try expect(!ServerProfile.draft().keepRetryingForwardingFailure &&
+                   ServerProfile.examples.allSatisfy { !$0.keepRetryingForwardingFailure },
+                   "Persistent forwarding recovery must require opt-in")
+        let legacy = """
+        {"id":"legacy","name":"Legacy","host":"server.example","user":"user",
+         "sshPort":22,"remotePort":17892,"localPort":7890,"autoReconnect":true}
+        """
+        for json in ["[\(legacy)]", "{\"version\":1,\"profiles\":[\(legacy)]}"] {
+            let decoded = try ServerConfiguration.decode(Data(json.utf8))
+            try expect(!decoded.profiles[0].keepRetryingForwardingFailure && decoded.profiles[0].autoReconnect,
+                       "Legacy configurations must preserve bounded reconnection behavior")
+            let roundTrip = try ServerConfiguration.decode(decoded.encoded())
+            try expect(roundTrip == decoded, "Legacy configuration round trip changed preferences")
+        }
+        for enabled in [false, true] {
+            for autoReconnect in [false, true] {
+                var profile = ServerProfile.examples[0]
+                profile.keepRetryingForwardingFailure = enabled
+                profile.autoReconnect = autoReconnect
+                let decoded = try JSONDecoder().decode(ServerProfile.self, from: JSONEncoder().encode(profile))
+                try expect(decoded == profile, "Recovery preference did not persist independently")
+            }
+        }
+        let invalid = legacy.dropLast() + ",\"keepRetryingForwardingFailure\":\"true\"}"
+        try expectThrows("Non-boolean persistent recovery preference was accepted") {
+            _ = try JSONDecoder().decode(ServerProfile.self, from: Data(invalid.utf8))
+        }
     }
 
     static func exampleStart() async throws {
@@ -548,6 +582,80 @@ struct CheckRunner {
         }
         try expect(SSHFailure.classify("Connection reset by peer").retryable, "Network reset should permit retry")
         try expect(SSHFailure.classify("", timedOut: true).retryable, "Timeout should permit retry")
+        for error in ["remote port forwarding failed for listen port 17892", "cannot listen to port", "bind: Address already in use"] {
+            try expect(SSHFailure.classify(error).isForwardingFailure, "Forwarding failure lost its recovery category")
+        }
+        for error in ["Permission denied (publickey).", "Host key verification failed.", "open failed: administratively prohibited"] {
+            let failure = SSHFailure.classify("remote port forwarding failed\n" + error)
+            try expect(!failure.retryable && !failure.isForwardingFailure,
+                       "Explicit security/policy rejection must take priority over forwarding failure")
+        }
+    }
+
+    static func forwardingRetryPolicy() throws {
+        let forwarding = SSHFailure.classify("remote port forwarding failed for listen port 17892")
+        let network = SSHFailure.classify("Connection reset by peer")
+        var policy = SSHReconnectPolicy()
+        try expect(policy.retryDelay(after: forwarding) == nil,
+                   "An initial port conflict must not trigger automatic forwarding retries")
+        for delay in [3, 6, 12, 24, 48, 60, 60] {
+            try expect(policy.retryDelay(after: network) == delay, "Ordinary network backoff changed")
+        }
+        try expect(policy.retryDelay(after: forwarding) == nil,
+                   "Network retries alone must not enable forwarding recovery")
+
+        policy.didConnect()
+        try expect(policy.retryDelay(after: network) == 3, "Connection success must reset network backoff")
+        for delay in [15, 30, 60, 60, 60] {
+            try expect(policy.retryDelay(after: forwarding) == delay, "Unexpected bounded forwarding backoff")
+            _ = policy.retryDelay(after: network)
+        }
+        try expect(policy.forwardingRetryCount == 5, "Forwarding retry budget was not counted independently")
+        for _ in 0..<3 {
+            try expect(policy.retryDelay(after: forwarding) == nil, "Exhausted forwarding retries must stop")
+        }
+
+        policy.didConnect()
+        try expect(policy.retryDelay(after: forwarding) == 15, "A successful recovery must reset the forwarding budget")
+        for error in ["Permission denied (publickey).", "Host key verification failed.",
+                      "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!", "open failed: administratively prohibited"] {
+            try expect(policy.retryDelay(after: SSHFailure.classify(error)) == nil,
+                       "A previous connection must not bypass permanent failures")
+        }
+        var restarted = SSHReconnectPolicy()
+        try expect(restarted.retryDelay(after: forwarding) == nil, "A fresh session must require its own successful connection")
+    }
+
+    static func persistentForwardingRetryPolicy() throws {
+        let conflict = SSHFailure.classify("remote port forwarding failed for listen port 17892")
+        var policy = SSHReconnectPolicy()
+        try expect(policy.retryDelay(after: conflict, keepRetryingForwardingFailure: true) == nil,
+                   "Opt-in must not enable recovery for an initial conflict")
+        policy.didConnect()
+        for delay in [15, 30, 60, 60, 60] {
+            try expect(policy.retryDelay(after: conflict, keepRetryingForwardingFailure: true) == delay &&
+                       !policy.isWaitingForForwardingRelease, "Opt-in changed the initial bounded backoff")
+        }
+        for _ in 0..<100 {
+            try expect(policy.retryDelay(after: conflict, keepRetryingForwardingFailure: true) == 60 &&
+                       policy.isWaitingForForwardingRelease, "Persistent recovery stopped or accelerated")
+        }
+        try expect(policy.forwardingRetryCount == 5, "Persistent retry counter must not grow without bound")
+        try expect(policy.retryDelay(after: conflict, keepRetryingForwardingFailure: false) == nil &&
+                   !policy.isWaitingForForwardingRelease, "Disabling persistent recovery must restore the limit")
+        for error in ["Permission denied (publickey).", "Host key verification failed.",
+                      "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!", "open failed: administratively prohibited"] {
+            let failure = SSHFailure.classify("remote port forwarding failed\n" + error)
+            try expect(policy.retryDelay(after: failure, keepRetryingForwardingFailure: true) == nil,
+                       "Persistent recovery bypassed an explicit security or forwarding rejection")
+        }
+        try expect(policy.retryDelay(after: SSHFailure.classify("Connection reset by peer"),
+                                    keepRetryingForwardingFailure: true) == 3,
+                   "Persistent forwarding waits changed network failure backoff")
+        policy.didConnect()
+        try expect(!policy.isWaitingForForwardingRelease && policy.forwardingRetryCount == 0 &&
+                   policy.retryDelay(after: conflict, keepRetryingForwardingFailure: true) == 15,
+                   "Successful recovery must reset the next forwarding recovery cycle")
     }
 
     static func safeLogs() throws {

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Close owned SSH processes on system sleep and resume eligible requested connections
+  on wake, without restarting manually stopped or terminally failed connections.
+- Add an optional, default-off continuous forwarding recovery setting: after the
+  existing five-attempt budget, retry every 60 seconds until recovery or manual stop.
+  It requires automatic reconnection and a previously established connection.
+- Add a separate, default-off Ping0 public-page check for IP type, risk value,
+  and shared-user estimates, bound to the observed Claude exit IP. Provider
+  errors do not interrupt tunnels; unavailable fields remain explicitly unknown.
+- Retry transient listener-check timeouts and preserve startup preferences
+  changed in another window when saving server edits.
+
 ## 0.6.0-preview.2 (build 5) — 2026-10-19
 
 - Settings now separates Mac login startup from each server's startup connection

@@ -15,7 +15,8 @@ use your Mac's local proxy through an SSH tunnel.
 
 - **Multiple servers:** add, edit, remove, and switch profiles from the top tabs.
 - **Tunnel controls:** independent connection states, reconnection after interruptions, and per-server startup preferences.
-- **Network checks:** OpenAI API, Claude, and Google reachability, plus optional Net.Coffee exit-IP assessments.
+- **Recovery options (current source):** close owned SSH processes before sleep and resume eligible connections on wake; optional forwarding retries every 60 seconds, off by default.
+- **Network checks:** OpenAI API, Claude, and Google reachability, plus optional Net.Coffee assessments and Ping0 IP type, risk, and shared-user estimates.
 - **Native menu-bar UI:** launch at login, adjustable panel width and font size, and a first-use guide.
 
 CATunnel requires an existing HTTP/mixed proxy. Starting a tunnel does not configure remote tools to use it.
@@ -63,6 +64,7 @@ for configuration, verification commands, and troubleshooting.
 
 SSH aliases, ProxyJump, interactive passwords, and IPv6 host addresses are not yet supported.
 API reachability does not prove account or model access. IP scores are optional, off by default, and for reference only.
+Ping0 lookup is in the current source, not the preview download above. It reads a public webpage and reports an error if the page changes or access is restricted.
 
 ## TODO
 

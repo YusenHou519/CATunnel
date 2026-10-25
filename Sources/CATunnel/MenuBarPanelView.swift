@@ -1,6 +1,35 @@
 import SwiftUI
 import TunnelCore
 
+struct AutoReconnectPresentation {
+    let title: String
+    let help: String
+
+    init?(enabled: Bool, phase: TunnelPhase) {
+        guard enabled else { return nil }
+        switch phase {
+        case .stopped:
+            title = "未开启连接"
+            help = "开启隧道后，符合条件的断线会自动重试。"
+        case .checking:
+            title = "正在检查连接"
+            help = "正在检查连接条件，自动重连设置已开启。"
+        case .connecting:
+            title = "正在建立连接"
+            help = "正在建立 SSH 隧道，自动重连设置已开启。"
+        case .connected:
+            title = "自动重连已开启"
+            help = "符合条件的断线会自动重试。"
+        case .reconnecting:
+            title = "等待自动重试"
+            help = "已安排延迟重试；关闭隧道开关可取消。"
+        case .failed:
+            title = "自动重连已停止"
+            help = "当前故障不会继续自动重试。检查错误后，可手动重新开启隧道。"
+        }
+    }
+}
+
 struct MenuBarPanelView: View {
     @ObservedObject var store: TunnelStore
     let showDetails: () -> Void
@@ -166,7 +195,7 @@ struct MenuBarPanelView: View {
         let status = store.presentationStatus(for: profile.id)
         let phase = phasePresentation(current.phase)
         let historical = store.isShowingHistoricalResults(for: profile.id)
-        let checking = current.proxyCheck == .checking || current.ipRisk.state == .checking
+        let checking = current.proxyCheck == .checking || current.ipRisk.state == .checking || current.ping0.state == .checking
 
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
@@ -196,8 +225,12 @@ struct MenuBarPanelView: View {
                     Label(phase.title, systemImage: phase.icon)
                         .foregroundStyle(phase.color)
                     Spacer()
-                    if profile.autoReconnect {
-                        Text("自动重连已开启").foregroundStyle(.secondary)
+                    if let reconnect = AutoReconnectPresentation(enabled: profile.autoReconnect, phase: current.phase) {
+                        Text(reconnect.title)
+                            .foregroundStyle(.secondary)
+                            .help(reconnect.help)
+                            .accessibilityIdentifier("auto-reconnect-status-\(profile.id)")
+                            .captureLayoutEvidence("auto-reconnect-status-\(profile.id)")
                     }
                 }
                 .font(panelFont(size: 11))
@@ -231,7 +264,7 @@ struct MenuBarPanelView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!canTest(current))
-                    .help(profile.assessIPRisk ? "通过该服务器的隧道检测服务与出口风险" : "通过该服务器的隧道检测服务；Net.Coffee 评分未开启")
+                    .help("通过该服务器的隧道检测服务，并查询已开启的 Net.Coffee / Ping0 IP 信息")
                     .accessibilityIdentifier("panel-test-\(profile.id)")
                 }
                 HStack(spacing: 4) {
@@ -256,6 +289,10 @@ struct MenuBarPanelView: View {
 
             Divider()
             riskSection(status.ipRisk, profile: profile, historical: historical)
+            Divider()
+            Ping0ResultView(result: status.ping0, enabled: profile.assessPing0,
+                            historical: historical, fontScale: store.panelAppearance.fontScale,
+                            identifierPrefix: "panel-ping0-\(profile.id)")
 
         }
     }
@@ -527,7 +564,8 @@ struct MenuBarPanelView: View {
     }
 
     private func canTest(_ status: TunnelStatus) -> Bool {
-        status.phase == .connected && status.proxyCheck != .checking && status.ipRisk.state != .checking
+        status.phase == .connected && status.proxyCheck != .checking
+            && status.ipRisk.state != .checking && status.ping0.state != .checking
     }
 
     private func phasePresentation(_ phase: TunnelPhase) -> (title: String, icon: String, color: Color) {

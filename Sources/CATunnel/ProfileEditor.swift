@@ -7,6 +7,7 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
     static let shared = ProfileEditorWindow()
     private var window: NSWindow?
     private var setupModel: SetupCheckModel?
+    private var installModel: FixedEntryInstallModel?
 
     func show(profile: ServerProfile, isNew: Bool, store: TunnelStore) {
         if let window {
@@ -16,8 +17,11 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
         }
         guard store.configurationError == nil, isNew || store.canModify(profile.id) else { return }
         let setupModel = SetupCheckModel()
+        let installModel = FixedEntryInstallModel()
         self.setupModel = setupModel
-        let editor = ProfileEditor(profile: profile, isNew: isNew, store: store, setupModel: setupModel) { [weak self] in
+        self.installModel = installModel
+        let editor = ProfileEditor(profile: profile, isNew: isNew, store: store, setupModel: setupModel,
+                                   installModel: installModel) { [weak self] in
             self?.window?.close()
         }
         let hosting = NSHostingView(rootView: editor)
@@ -37,6 +41,8 @@ final class ProfileEditorWindow: NSObject, NSWindowDelegate {
         guard let closing = notification.object as? NSWindow, closing === window else { return }
         setupModel?.cancel()
         setupModel = nil
+        installModel?.cancel()
+        installModel = nil
         closing.contentView = nil
         window = nil
     }
@@ -56,16 +62,26 @@ struct ProfileEditor: View {
     @State private var remotePort: String
     @State private var localPort: String
     @State private var autoReconnect: Bool
+    @State private var keepRetryingForwardingFailure: Bool
     @State private var autoConnectOnLaunch: Bool
+    @State private var didEditAutoConnectOnLaunch = false
     @State private var identityFile: String?
     @State private var assessIPRisk: Bool
+    @State private var assessPing0: Bool
+    @State private var useFixedEntry: Bool
+    @State private var fixedEntryHelperPath: String
+    @State private var fixedEntryRuntimePath: String
+    @State private var fixedEntryPythonPath: String
     @State private var errorMessage: String?
     @State private var copiedCommand = false
+    @State private var installedInputs: [String]?
     @StateObject private var setup: SetupCheckModel
+    @StateObject private var installation: FixedEntryInstallModel
     @FocusState private var focusedField: String?
 
     init(profile: ServerProfile, isNew: Bool, store: TunnelStore,
-         setupModel: SetupCheckModel? = nil, onClose: @escaping () -> Void = {}) {
+         setupModel: SetupCheckModel? = nil, installModel: FixedEntryInstallModel? = nil,
+         onClose: @escaping () -> Void = {}) {
         self.profile = profile
         self.isNew = isNew
         self.store = store
@@ -77,10 +93,17 @@ struct ProfileEditor: View {
         _remotePort = State(initialValue: String(profile.remotePort))
         _localPort = State(initialValue: String(profile.localPort))
         _autoReconnect = State(initialValue: profile.autoReconnect)
+        _keepRetryingForwardingFailure = State(initialValue: profile.keepRetryingForwardingFailure)
         _autoConnectOnLaunch = State(initialValue: profile.autoConnectOnLaunch)
         _identityFile = State(initialValue: profile.identityFile)
         _assessIPRisk = State(initialValue: profile.assessIPRisk)
+        _assessPing0 = State(initialValue: profile.assessPing0)
+        _useFixedEntry = State(initialValue: profile.useFixedEntry)
+        _fixedEntryHelperPath = State(initialValue: profile.fixedEntryHelperPath ?? "")
+        _fixedEntryRuntimePath = State(initialValue: profile.fixedEntryRuntimePath ?? "")
+        _fixedEntryPythonPath = State(initialValue: profile.fixedEntryPythonPath ?? "")
         _setup = StateObject(wrappedValue: setupModel ?? SetupCheckModel())
+        _installation = StateObject(wrappedValue: installModel ?? FixedEntryInstallModel())
     }
 
     private var blockedReason: String? {
@@ -96,7 +119,14 @@ struct ProfileEditor: View {
 
     private var inputs: [String] {
         [name, host, user, sshPort, remotePort, localPort, identityFile ?? "",
-         String(autoReconnect), String(autoConnectOnLaunch), String(assessIPRisk)]
+         String(autoReconnect), String(keepRetryingForwardingFailure), String(autoConnectOnLaunch),
+         String(assessIPRisk), String(assessPing0), String(useFixedEntry),
+         fixedEntryHelperPath, fixedEntryRuntimePath, fixedEntryPythonPath]
+    }
+
+    private var installationBlockedReason: String? {
+        FixedEntryInstallModel.blockedReason(editorReason: blockedReason,
+            phase: isNew ? nil : store.status(for: profile.id).phase, checking: setup.isChecking)
     }
 
     var body: some View {
@@ -123,12 +153,15 @@ struct ProfileEditor: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         addressFields
+                            .disabled(installation.isInstalling)
                         Divider()
                         identityFields
+                            .disabled(installation.isInstalling)
                         Divider()
                         proxyFields
                         Divider()
                         setupFields
+                            .disabled(installation.isInstalling)
                             .id("setup-section")
                     }
                     .padding(.horizontal, 4)
@@ -140,6 +173,17 @@ struct ProfileEditor: View {
                 .onAppear {
                     if !setup.items.isEmpty {
                         DispatchQueue.main.async { reader.scrollTo("setup-section", anchor: .top) }
+                    } else if useFixedEntry || installation.state != .idle {
+                        DispatchQueue.main.async { reader.scrollTo("fixed-entry-section", anchor: .top) }
+                    }
+                }
+                .onChange(of: useFixedEntry) { enabled in
+                    if enabled { reader.scrollTo("fixed-entry-section", anchor: .top) }
+                }
+                .onChange(of: installation.state) { state in
+                    if state != .idle {
+                        focusedField = nil
+                        reader.scrollTo("fixed-entry-section", anchor: .top)
                     }
                 }
                 .onChange(of: setup.items) { items in
@@ -171,7 +215,7 @@ struct ProfileEditor: View {
                         .captureLayoutEvidence("profile-cancel-setup")
                 } else {
                     Button("检查连接准备", action: checkSetup)
-                        .disabled(blockedReason != nil)
+                        .disabled(blockedReason != nil || installation.isInstalling)
                         .accessibilityIdentifier("profile-check-setup")
                         .captureLayoutEvidence("profile-check-setup")
                 }
@@ -182,7 +226,7 @@ struct ProfileEditor: View {
                 Button(isNew ? "添加服务器" : "保存") { save() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(blockedReason != nil)
+                    .disabled(blockedReason != nil || installation.isInstalling)
                     .accessibilityIdentifier("save-profile")
                     .captureLayoutEvidence("save-profile")
             }
@@ -194,17 +238,27 @@ struct ProfileEditor: View {
         .foregroundStyle(Color.primary)
         .accessibilityIdentifier("profile-editor")
         .onAppear {
-            if setup.items.isEmpty { focusedField = "profile-name" }
+            if setup.items.isEmpty && !useFixedEntry { focusedField = "profile-name" }
         }
-        .onChange(of: inputs) { _ in
+        .onChange(of: inputs) { current in
             setup.cancel()
+            if current != installedInputs { installation.cancel(clearState: true) }
             errorMessage = nil
             copiedCommand = false
         }
         .onChange(of: blockedReason) { reason in
-            if reason != nil { setup.cancel() }
+            if reason != nil {
+                setup.cancel()
+                installation.cancel()
+            }
         }
-        .onDisappear { setup.cancel() }
+        .onChange(of: installationBlockedReason) { reason in
+            if reason != nil { installation.cancel() }
+        }
+        .onDisappear {
+            setup.cancel()
+            installation.cancel()
+        }
     }
 
     private var addressFields: some View {
@@ -270,8 +324,22 @@ struct ProfileEditor: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .disabled(installation.isInstalling)
+            FixedEntryOptions(isOn: $useFixedEntry, helperPath: $fixedEntryHelperPath,
+                              runtimePath: $fixedEntryRuntimePath, pythonPath: $fixedEntryPythonPath,
+                              installState: installation.state,
+                              installBlockedReason: installationBlockedReason, demoMode: store.demoMode,
+                              onInstall: installFixedEntry, onCancelInstall: { installation.cancel() })
+                .disabled(blockedReason != nil)
+                .id("fixed-entry-section")
             VStack(alignment: .leading, spacing: 5) {
-                Toggle("启动后自动连接", isOn: $autoConnectOnLaunch)
+                Toggle("启动后自动连接", isOn: Binding(
+                    get: { autoConnectOnLaunch },
+                    set: { enabled in
+                        autoConnectOnLaunch = enabled
+                        didEditAutoConnectOnLaunch = true
+                    }
+                ))
                     .font(.system(size: 12))
                     .accessibilityIdentifier("profile-auto-connect")
                     .captureLayoutEvidence("profile-auto-connect")
@@ -280,14 +348,21 @@ struct ProfileEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .disabled(installation.isInstalling)
             VStack(alignment: .leading, spacing: 5) {
                 Toggle("意外断开后自动重连", isOn: $autoReconnect)
                     .font(.system(size: 12))
                     .accessibilityIdentifier("profile-auto-reconnect")
+                    .captureLayoutEvidence("profile-auto-reconnect")
                 Text("恢复已开启的隧道；手动断开后不会重连。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            .disabled(installation.isInstalling)
+            if !useFixedEntry {
+                ForwardingRetryOption(isOn: $keepRetryingForwardingFailure, autoReconnect: autoReconnect)
+                    .disabled(installation.isInstalling)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Toggle("启用 Net.Coffee 出口 IP 评分", isOn: $assessIPRisk)
@@ -299,6 +374,18 @@ struct ProfileEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .disabled(installation.isInstalling)
+            VStack(alignment: .leading, spacing: 5) {
+                Toggle("启用 Ping0 IP 信息查询", isOn: $assessPing0)
+                    .font(.system(size: 12))
+                    .accessibilityIdentifier("profile-assess-ping0")
+                    .captureLayoutEvidence("profile-assess-ping0")
+                Text("可选，默认关闭。手动检测时向 Ping0 公开查询页发送出口 IP，获取类型、风控值和估算共享人数。网页可能变化，结果仅供参考。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .disabled(installation.isInstalling)
         }
     }
 
@@ -312,6 +399,12 @@ struct ProfileEditor: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if useFixedEntry {
+                Text("连接准备检查不确认转接程序是否已运行；开启连接时才验证固定入口和后端。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !setup.items.isEmpty {
                 SetupCheckResultsView(items: setup.items)
             }
@@ -380,7 +473,7 @@ struct ProfileEditor: View {
         }
     }
 
-    private func editedProfile() throws -> ServerProfile {
+    private func editedProfile(forInstallation: Bool = false) throws -> ServerProfile {
         let trim: (String) -> String = { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let sshPortValue = Int(trim(sshPort)),
               let remotePortValue = Int(trim(remotePort)),
@@ -394,13 +487,24 @@ struct ProfileEditor: View {
         let edited = ServerProfile(id: profile.id, name: trim(name), host: trim(host), user: trim(user),
                                    sshPort: sshPortValue, remotePort: remotePortValue, localPort: localPortValue,
                                    autoReconnect: autoReconnect, identityFile: identityFile, assessIPRisk: assessIPRisk,
-                                   autoConnectOnLaunch: autoConnectOnLaunch)
+                                   assessPing0: assessPing0, autoConnectOnLaunch: autoConnectOnLaunch,
+                                   keepRetryingForwardingFailure: keepRetryingForwardingFailure,
+                                   useFixedEntry: forInstallation ? false : useFixedEntry,
+                                   fixedEntryHelperPath: Self.optionalPath(fixedEntryHelperPath, original: profile.fixedEntryHelperPath),
+                                   fixedEntryRuntimePath: Self.optionalPath(fixedEntryRuntimePath, original: profile.fixedEntryRuntimePath),
+                                   fixedEntryPythonPath: Self.optionalPath(fixedEntryPythonPath, original: profile.fixedEntryPythonPath))
         try edited.validate()
         return edited
     }
 
+    static func optionalPath(_ value: String, original: String?) -> String? {
+        if value == (original ?? "") { return original }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func checkSetup() {
-        guard blockedReason == nil else { return }
+        guard blockedReason == nil, !installation.isInstalling else { return }
         do {
             let candidate = try editedProfile()
             errorMessage = nil
@@ -412,11 +516,14 @@ struct ProfileEditor: View {
     }
 
     private func save() {
-        guard blockedReason == nil else { return }
+        guard blockedReason == nil, !installation.isInstalling else { return }
         do {
             let edited = try editedProfile()
             if isNew { try store.add(edited) }
-            else { try store.save(edited) }
+            else {
+                try store.save(edited, original: profile,
+                               autoConnectOnLaunchEdited: didEditAutoConnectOnLaunch)
+            }
             close()
         } catch {
             errorMessage = error.localizedDescription
@@ -425,7 +532,174 @@ struct ProfileEditor: View {
 
     private func close() {
         setup.cancel()
+        installation.cancel()
         onClose()
+    }
+
+    private func installFixedEntry() {
+        guard installationBlockedReason == nil, !installation.isInstalling else { return }
+        do {
+            let candidate = try FixedEntryInstallModel.validateCandidate(editedProfile(forInstallation: true),
+                isNew: isNew, existingProfiles: store.profiles)
+            errorMessage = nil
+            installedInputs = nil
+            installation.start(profile: candidate, demoMode: store.demoMode) { result in
+                guard installationBlockedReason == nil else { return }
+                fixedEntryHelperPath = result.helperPath
+                fixedEntryRuntimePath = result.runtimePath
+                useFixedEntry = true
+                installedInputs = inputs
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct FixedEntryOptions: View {
+    @Binding var isOn: Bool
+    @Binding var helperPath: String
+    @Binding var runtimePath: String
+    @Binding var pythonPath: String
+    var installState: FixedEntryInstallState = .idle
+    var installBlockedReason: String?
+    var demoMode = false
+    var onInstall: () -> Void = {}
+    var onCancelInstall: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Toggle("固定入口模式（实验性）", isOn: $isOn)
+                .font(.system(size: 12))
+                .accessibilityIdentifier("profile-fixed-entry")
+                .captureLayoutEvidence("profile-fixed-entry")
+                .disabled(installState.isInstalling)
+            Text("默认关闭。可安装转接程序，或填写已有程序的路径。保存后不会立即连接。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .captureLayoutEvidence("profile-fixed-entry-notice")
+            pathField("远端 Python 路径（可选）", text: $pythonPath,
+                      placeholder: "留空使用 python3，例如 /opt/tools/bin/python3", identifier: "profile-fixed-entry-python")
+                .disabled(installState.isInstalling)
+            Text("填写服务器上已有 Python 3.9+ 的绝对路径；留空使用远端默认 python3。安装、验证和连接均使用此解释器，不升级系统 Python。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .captureLayoutEvidence("profile-fixed-entry-python-notice")
+            if isOn {
+                pathField("远端转接程序路径", text: $helperPath,
+                          placeholder: "例如 /opt/catunnel/relay.py", identifier: "profile-fixed-entry-helper")
+                    .disabled(installState.isInstalling)
+                pathField("远端私有运行目录", text: $runtimePath,
+                          placeholder: "例如 /run/user/1000/catunnel-entry", identifier: "profile-fixed-entry-runtime")
+                    .disabled(installState.isInstalling)
+                Text("填写服务器上实际使用的绝对路径，不支持 ~/。转接程序的入口端口必须与“服务器代理端口”相同；后端端口会随连接分配。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            FixedEntryInstallActions(state: installState, blockedReason: installBlockedReason,
+                                     demoMode: demoMode, onInstall: onInstall, onCancel: onCancelInstall)
+        }
+    }
+
+    private func pathField(_ title: String, text: Binding<String>, placeholder: String,
+                           identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 12, weight: .medium))
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12))
+                .accessibilityLabel(title)
+                .accessibilityIdentifier(identifier)
+                .captureLayoutEvidence(identifier)
+        }
+    }
+}
+
+struct FixedEntryInstallActions: View {
+    let state: FixedEntryInstallState
+    let blockedReason: String?
+    let demoMode: Bool
+    let onInstall: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                if state.isInstalling {
+                    ProgressView().controlSize(.small)
+                    Text(demoMode ? "演示安装中…" : "正在安装并检查固定入口…")
+                        .font(.system(size: 12))
+                    Spacer(minLength: 4)
+                    Button("取消安装", action: onCancel)
+                        .accessibilityIdentifier("profile-cancel-fixed-entry-install")
+                        .captureLayoutEvidence("profile-cancel-fixed-entry-install")
+                } else {
+                    Button("安装并启用", action: onInstall)
+                        .disabled(blockedReason != nil)
+                        .accessibilityIdentifier("profile-install-fixed-entry")
+                        .captureLayoutEvidence("profile-install-fixed-entry")
+                }
+            }
+            Text(demoMode
+                 ? "离线演示：仅模拟安装和填入路径，不访问服务器。"
+                 : "点击后通过 SSH 安装到当前账号的私有目录并启动，无需 sudo。服务器重启后可再次点击启动；暂不设置开机自启。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .captureLayoutEvidence("profile-fixed-entry-install-notice")
+            if let blockedReason {
+                Text(blockedReason)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let message {
+                Label(message.text, systemImage: message.icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(message.color)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("profile-fixed-entry-install-result")
+                    .captureLayoutEvidence("profile-fixed-entry-install-result")
+            }
+        }
+    }
+
+    var message: (text: String, icon: String, color: Color)? {
+        switch state {
+        case .idle, .installing: return nil
+        case .succeeded(let result, let demo):
+            let prefix = demo ? "演示完成" : (result.reused ? "已有固定入口检查通过" : "安装成功，固定入口已启动")
+            return ("\(prefix)。路径已填入，当前表单已开启固定入口；请保存后再连接。",
+                    "checkmark.circle.fill", .green)
+        case .failed(let message):
+            return ("\(message) 表单设置未改变。", "exclamationmark.circle", .red)
+        case .cancelled:
+            return ("已停止本机等待，表单设置未改变。远端可能已完成安装，可再次点击检查。",
+                    "exclamationmark.circle", .orange)
+        }
+    }
+}
+
+struct ForwardingRetryOption: View {
+    @Binding var isOn: Bool
+    let autoReconnect: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Toggle("端口占用时持续重试", isOn: $isOn)
+                .font(.system(size: 12))
+                .disabled(!autoReconnect)
+                .accessibilityIdentifier("profile-keep-retrying-forwarding")
+                .captureLayoutEvidence("profile-keep-retrying-forwarding")
+            Text("默认关闭。需开启自动重连；仅用于曾连接成功后的恢复。常规 5 次转发重试后，仍每 60 秒重试，直到恢复或手动关闭隧道。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

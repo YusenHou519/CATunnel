@@ -79,8 +79,10 @@ before connecting. Preserve existing IDs; choose distinct IDs for new profiles.
       "remotePort": 17892,
       "localPort": 7890,
       "autoReconnect": true,
+      "keepRetryingForwardingFailure": false,
       "identityFile": null,
       "assessIPRisk": false,
+      "assessPing0": false,
       "autoConnectOnLaunch": false
     }
   ]
@@ -96,8 +98,13 @@ before connecting. Preserve existing IDs; choose distinct IDs for new profiles.
 | `remotePort` | Remote loopback proxy listener; GUI default `17892`. |
 | `localPort` | Mac loopback HTTP proxy destination; GUI default `7890`. |
 | `autoReconnect` | Retry eligible failures of a started connection; GUI default `true`. |
+| `keepRetryingForwardingFailure` | Current source only: default/omitted `false`; after a previously connected tunnel exhausts five forwarding retries, continue every 60 seconds while `autoReconnect` is enabled. |
+| `useFixedEntry` | Current source only: experimental, default/omitted `false`. Connection requires a running compatible remote helper; installation is a separate explicit user action. |
+| `fixedEntryHelperPath`, `fixedEntryRuntimePath` | Optional while fixed entry is off; when on, require explicit remote absolute paths. `remotePort` remains the fixed entry and must match the helper's status before takeover. |
+| `fixedEntryPythonPath` | Optional remote Python executable absolute path. Omitted or empty uses `python3`; the same choice is used for installation, verification, and every fixed-entry control request. No local expansion of `~/`, shell activation, or automatic interpreter installation. |
 | `identityFile` | Absolute or `~/` key path; omitted/null uses OpenSSH default keys/agent. |
 | `assessIPRisk` | Opt-in Net.Coffee lookup of the observed public exit IP; omitted means `false`. |
+| `assessPing0` | Opt-in Ping0 public-page lookup for the same exit IP; omitted means `false`. Current source only. |
 | `autoConnectOnLaunch` | Connect this server on normal app launch; omitted means `false`. |
 
 All ports must be 1–65535. The first eight example fields are required; GUI defaults
@@ -109,6 +116,38 @@ Invalid files are preserved; profile changes stay disabled until repair and rest
 controls. Login startup is managed in Settings, not in `profiles.json`.
 Changing a startup switch does not connect or disconnect the current session.
 Do not invent additional JSON fields or a CLI for server CRUD.
+
+Current source observes system sleep/wake only in normal mode. Sleep closes owned
+SSH processes; wake resumes only active requested connections with automatic
+reconnection enabled. Manually stopped or terminally failed connections stay stopped.
+The remote server may still retain an old listener; do not describe this as a guarantee
+of immediate recovery. Continuous forwarding retry is a separate default-off profile
+choice, does not override authentication/host-key failures or initial port conflicts,
+and stops when the user stops the tunnel. Neither feature changes the installed app
+until an updated build is installed.
+
+Fixed-entry mode uses the existing owned SSH master, a native Mac loopback gateway,
+and the separately managed remote `experimental/fixed_entry/relay.py` helper.
+Each transport receives a dynamic reverse port; the helper owns the fixed entry.
+The app installs or starts a remote helper only through the explicit **安装并启用**
+action on a stopped server. It uses the current SSH user's private
+`~/.catunnel/fixed-entry/<port>/` directory, bundles its own Python scripts, and
+requires Python 3.9+. It does not use sudo, edit SSH/shell/service settings, or
+install missing dependencies. Success fills and enables only the editor draft.
+Installation, verification, and connection control use its selected Python path.
+If the server's default `python3` is too old, enter an existing Python 3.9+
+executable's absolute path in the editor;
+this does not change the system Python or activate a Conda environment. Old
+profiles keep their existing behavior without a rewrite. Saving and connecting
+remain explicit. Cancellation may leave a completed remote install;
+retry checks the same managed helper without replacing it. Unknown files, occupied
+ports, incompatible installs, and active leases are preserved and rejected.
+No boot service is configured; after server reboot, explicitly use the action again
+to start a clean stopped installation. Do not claim it reserves a port at the OS
+level or provides Internet access while the Mac proxy is unavailable. The forwarding-conflict
+continuous retry preference is ignored in fixed-entry mode. Setup diagnostics do
+not establish helper readiness; connection establishment checks it explicitly.
+Preserve old configurations and running connections when building or testing this mode.
 
 ## Launch and offline commands
 

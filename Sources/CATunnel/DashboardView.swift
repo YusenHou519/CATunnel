@@ -266,7 +266,7 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(!canTest(status))
-                .help(profile.assessIPRisk ? "通过服务器隧道检测服务，并获取 Net.Coffee 出口 IP 风险评分" : "通过服务器隧道检测服务；Net.Coffee 评分未开启")
+                .help("通过服务器隧道检测服务，并查询已开启的 Net.Coffee / Ping0 IP 信息")
                 .accessibilityIdentifier("test-\(profile.id)")
 
                 Button {
@@ -308,6 +308,11 @@ struct DashboardView: View {
             }
             websiteResults(status, serverID: profile.id)
             ipRiskResult(status.ipRisk, serverID: profile.id)
+            Ping0ResultView(result: status.ping0, enabled: profile.assessPing0,
+                            historical: store.isShowingHistoricalResults(for: profile.id),
+                            identifierPrefix: "details-ping0-\(profile.id)")
+                .padding(11)
+                .background(TunnelPalette.subtle, in: RoundedRectangle(cornerRadius: 10))
 
             HStack {
                 Label(profile.autoReconnect ? "自动重连" : "手动连接", systemImage: profile.autoReconnect ? "arrow.triangle.2.circlepath" : "hand.tap")
@@ -769,6 +774,7 @@ struct DashboardView: View {
         guard case .connected = status.phase else { return false }
         if case .checking = status.proxyCheck { return false }
         if case .checking = status.ipRisk.state { return false }
+        if case .checking = status.ping0.state { return false }
         return true
     }
 
