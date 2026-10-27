@@ -1,14 +1,24 @@
-![CATunnel 封面](docs/assets/catunnel-cover-v1.png)
+<p align="center">
+  <a href="https://yusenhou519.github.io/CATunnel/?lang=zh"><img src="site/assets/images/cover-1280.webp" width="900" alt="CATunnel 封面：穿过山间隧道的连接"></a>
+</p>
 
-# CATunnel — Coding Agent Tunnel
+<h1><img src="site/assets/favicon.svg" width="32" height="32" alt=""> CATunnel — Coding Agent Tunnel</h1>
 
 [![构建与预览验证](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
 
-[English](README.en.md) · [使用指南](docs/USAGE.md) · [Agent 指南](AGENTS.md)
+[项目主页](https://yusenhou519.github.io/CATunnel/?lang=zh) · [English](README.en.md) · [使用指南](docs/USAGE.md) · [Agent 指南](AGENTS.md)
 
 轻量级原生 macOS 菜单栏应用，让远端 Codex、Claude 等工具通过 SSH 隧道使用 Mac 上的本地代理。
 
 `远端工具 → 服务器回环端口 → SSH 隧道 → Mac 本地代理 → 外网`
+
+## 项目主页与工作原理
+
+在[中英文项目主页](https://yusenhou519.github.io/CATunnel/?lang=zh)查看功能介绍、界面预览、快速开始和下载入口。
+
+**[播放工作原理动画 →](https://yusenhou519.github.io/CATunnel/?lang=zh#how-it-works)**
+跟随光点查看请求如何经过服务器入口、SSH 隧道和 Mac 代理到达目标服务，以及响应如何返回。
+支持暂停、单步和重新播放；动画为流程示意，不会发起真实网络请求。
 
 ## 功能
 
@@ -109,6 +119,7 @@ Mac 休眠期间不能通过它联网，已有 TCP 请求也不会迁移到新�
 
 | 文档 | 内容 |
 | --- | --- |
+| [主页维护](docs/WEBSITE.md) | 双语页面、图片优化、交互检查与 GitHub Pages 发布 |
 | [使用指南](docs/USAGE.md) | 安装、SSH 准备、代理配置、启动设置与排障 |
 | [AGENTS.md](AGENTS.md) | 给 AI Agent 的配置格式、命令、验证与操作约定 |
 | [贡献指南](CONTRIBUTING.md) | 源码构建、离线演示、测试与项目结构 |

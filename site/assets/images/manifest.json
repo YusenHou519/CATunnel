@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "generator": "python3 scripts/prepare-site-images.py",
+  "encoder": {
+    "pillow": "12.3.0",
+    "libwebp": "1.6.0"
+  },
+  "images": [
+    {
+      "key": "cover",
+      "source": "docs/assets/catunnel-cover-v1.png",
+      "original": {
+        "width": 1983,
+        "height": 793,
+        "bytes": 3489642,
+        "sha256": "3a9ff3380df2a028f394a991f654ee7816f9ab8864ddbb05aef1046a920ea66f",
+        "hasTransparency": false
+      },
+      "encoding": {
+        "format": "WebP",
+        "lossless": false,
+        "method": 6,
+        "sourceColorProfilePreserved": false,
+        "quality": 82
+      },
+      "variants": [
+        {
+          "file": "cover-640.webp",
+          "width": 640,
+          "height": 256,
+          "bytes": 52580,
+          "sha256": "57efa54a8615fe3fb7860802018492f3efa85eb85f6e9d597fc6f0034881def0",
+          "reductionPercent": 98.49
+        },
+        {
+          "file": "cover-1280.webp",
+          "width": 1280,
+          "height": 512,
+          "bytes": 193360,
+          "sha256": "aae18f49b6d0e6f03d1bc16ff9eaf543e012e0f4e41b29da63a47790cd68053f",
+          "reductionPercent": 94.46
+        },
+        {
+          "file": "cover-1920.webp",
+          "width": 1920,
+          "height": 768,
+          "bytes": 382036,
+          "sha256": "d2d22b25fd8532fd3bf871d8e370060aa61a89acf2acdbfdf4d8125f8df2ad93",
+          "reductionPercent": 89.05
+        }
+      ]
+    },
+    {
+      "key": "menu-panel",
+      "source": "docs/assets/screenshots/menu-panel.png",
+      "original": {
+        "width": 640,
+        "height": 1280,
+        "bytes": 122284,
+        "sha256": "ae92284609b1ed685bca9dc0eb2769be0eb17851f232b6eb0c0439fdc82462d5",
+        "hasTransparency": false
+      },
+      "encoding": {
+        "format": "WebP",
+        "lossless": true,
+        "method": 6,
+        "sourceColorProfilePreserved": true
+      },
+      "variants": [
+        {
+          "file": "menu-panel-320.webp",
+          "width": 320,
+          "height": 640,
+          "bytes": 28790,
+          "sha256": "e07416a4c49a75e3ecc33e675f72e8d2d94d32c02761060c2db957883fb0bfe1",
+          "reductionPercent": 76.46
+        },
+        {
+          "file": "menu-panel-640.webp",
+          "width": 640,
+          "height": 1280,
+          "bytes": 37688,
+          "sha256": "87fd65c813fb03d49ee95c7a0e83e46b39b33fcd8800607a81e7a83072ec5b92",
+          "reductionPercent": 69.18
+        }
+      ]
+    },
+    {
+      "key": "settings",
+      "source": "docs/assets/screenshots/settings.png",
+      "original": {
+        "width": 640,
+        "height": 1280,
+        "bytes": 106291,
+        "sha256": "e9a2903a414e9e24b2129851243929edfdf0ba3ff5d7534b6fa519be71ba5f5c",
+        "hasTransparency": false
+      },
+      "encoding": {
+        "format": "WebP",
+        "lossless": true,
+        "method": 6,
+        "sourceColorProfilePreserved": true
+      },
+      "variants": [
+        {
+          "file": "settings-320.webp",
+          "width": 320,
+          "height": 640,
+          "bytes": 22856,
+          "sha256": "74a2c8068c1351ddf6ec97711c740515a2b30af5b8f277f0adb36780eea245e0",
+          "reductionPercent": 78.5
+        },
+        {
+          "file": "settings-640.webp",
+          "width": 640,
+          "height": 1280,
+          "bytes": 31992,
+          "sha256": "981011f6ea1cb19d720c5eb141aa4eaaaa3e92e34916fb173ede0af0e4e24be8",
+          "reductionPercent": 69.9
+        }
+      ]
+    },
+    {
+      "key": "server-editor",
+      "source": "docs/assets/screenshots/server-editor.png",
+      "original": {
+        "width": 1020,
+        "height": 1520,
+        "bytes": 211020,
+        "sha256": "9cfcb641f6ef0ad65a6023dfb8ae66b09d899ffe590e1c1f6e1076053153d4e4",
+        "hasTransparency": false
+      },
+      "encoding": {
+        "format": "WebP",
+        "lossless": true,
+        "method": 6,
+        "sourceColorProfilePreserved": true
+      },
+      "variants": [
+        {
+          "file": "server-editor-320.webp",
+          "width": 320,
+          "height": 477,
+          "bytes": 27026,
+          "sha256": "6fbe572392d2421929f20d09a4b044e9419347f744862bc02289f8782aca07ef",
+          "reductionPercent": 87.19
+        },
+        {
+          "file": "server-editor-640.webp",
+          "width": 640,
+          "height": 954,
+          "bytes": 68182,
+          "sha256": "9c9e0b9086d09c5f9c8fe80c04bacef2b2bd510dfb0ac9e347fba04791195048",
+          "reductionPercent": 67.69
+        },
+        {
+          "file": "server-editor-960.webp",
+          "width": 960,
+          "height": 1431,
+          "bytes": 121504,
+          "sha256": "1ce0d745319331e55329f0277baaad35b9bdbac4904d40c6c140de8e9be0d42a",
+          "reductionPercent": 42.42
+        }
+      ]
+    },
+    {
+      "key": "getting-started",
+      "source": "docs/assets/screenshots/getting-started.png",
+      "original": {
+        "width": 1020,
+        "height": 1380,
+        "bytes": 266397,
+        "sha256": "103a8550a18c4775af0290615884dac85afc23f3f225d3dc52bbc1c6f211dab7",
+        "hasTransparency": false
+      },
+      "encoding": {
+        "format": "WebP",
+        "lossless": true,
+        "method": 6,
+        "sourceColorProfilePreserved": true
+      },
+      "variants": [
+        {
+          "file": "getting-started-320.webp",
+          "width": 320,
+          "height": 433,
+          "bytes": 36168,
+          "sha256": "319262137a0403c0e42a750191f1ba1158b31eb5a46380efcdadb84f19258e2e",
+          "reductionPercent": 86.42
+        },
+        {
+          "file": "getting-started-640.webp",
+          "width": 640,
+          "height": 866,
+          "bytes": 95142,
+          "sha256": "645d52ec174b7acc62efe3e6a9bb97f7080c130d9b34949500e5ef7ebf5cc0ac",
+          "reductionPercent": 64.29
+        },
+        {
+          "file": "getting-started-960.webp",
+          "width": 960,
+          "height": 1299,
+          "bytes": 173214,
+          "sha256": "1f09efb66bb64b0d400d9a3d3ba61b5fa1bbbcbd7c9b0027a1db4c697bed0ec5",
+          "reductionPercent": 34.98
+        }
+      ]
+    }
+  ]
+}

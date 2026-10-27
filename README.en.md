@@ -1,15 +1,27 @@
-![CATunnel cover](docs/assets/catunnel-cover-v1.png)
+<p align="center">
+  <a href="https://yusenhou519.github.io/CATunnel/?lang=en"><img src="site/assets/images/cover-1280.webp" width="900" alt="CATunnel cover: a connection through a mountain tunnel"></a>
+</p>
 
-# CATunnel — Coding Agent Tunnel
+<h1><img src="site/assets/favicon.svg" width="32" height="32" alt=""> CATunnel — Coding Agent Tunnel</h1>
 
 [![Validate and package preview](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml/badge.svg)](https://github.com/YusenHou519/CATunnel/actions/workflows/validate.yml)
 
-[简体中文](README.md) · [User guide](docs/USAGE.en.md) · [Agent guide](AGENTS.md)
+[Project website](https://yusenhou519.github.io/CATunnel/?lang=en) · [简体中文](README.md) · [User guide](docs/USAGE.en.md) · [Agent guide](AGENTS.md)
 
 A lightweight native macOS menu-bar app that lets remote tools such as Codex and Claude
 use your Mac's local proxy through an SSH tunnel.
 
 `Remote tool → server loopback port → SSH tunnel → Mac local proxy → Internet`
+
+## Project website and how it works
+
+Visit the [bilingual project website](https://yusenhou519.github.io/CATunnel/?lang=en)
+for features, interface previews, setup instructions and downloads.
+
+**[Play the traffic animation →](https://yusenhou519.github.io/CATunnel/?lang=en#how-it-works)**
+Follow a request through the server entry, SSH tunnel and Mac proxy to its destination,
+then watch the response return. Pause, advance one step or replay at your own pace.
+This is an illustration; it does not send real network requests.
 
 ## Features
 
@@ -123,6 +135,7 @@ Distribution is through GitHub; there is no App Store plan.
 
 | Document | Contents |
 | --- | --- |
+| [Website maintenance](docs/WEBSITE.md) | Bilingual pages, image optimization, interaction checks and GitHub Pages deployment |
 | [User guide](docs/USAGE.en.md) | Installation, SSH setup, proxy configuration, startup, and troubleshooting |
 | [AGENTS.md](AGENTS.md) | Configuration format, commands, verification, and operating guidance for AI agents |
 | [Contributing](CONTRIBUTING.md) | Building, offline demos, checks, and project structure |
