@@ -26,11 +26,30 @@ struct FixedEntryStatus: Sendable {
 
 struct FixedEntryError: Error, LocalizedError {
     let failure: SSHFailure
+    let canRetryRenewal: Bool
     var errorDescription: String? { failure.message }
-    init(_ message: String, retryable: Bool = false) {
+    init(_ message: String, retryable: Bool = false, canRetryRenewal: Bool = false) {
         failure = .init(message: message, retryable: retryable)
+        self.canRetryRenewal = canRetryRenewal
     }
-    init(failure: SSHFailure) { self.failure = failure }
+    init(failure: SSHFailure) {
+        self.failure = failure
+        canRetryRenewal = failure.retryable
+    }
+}
+
+struct FixedEntryLeaseWindow: Equatable, Sendable {
+    let deadline: TimeInterval
+
+    init(requestStartedAt: TimeInterval, leaseSeconds: TimeInterval) {
+        // A delayed reply must never add time to the last confirmed remote lease.
+        deadline = requestStartedAt + leaseSeconds - min(1, leaseSeconds / 10)
+    }
+
+    func requestTimeout(at now: TimeInterval) -> TimeInterval? {
+        let remaining = deadline - now - 0.25
+        return remaining >= 0.5 ? min(6, remaining) : nil
+    }
 }
 
 enum FixedEntryPythonFailure {
@@ -50,6 +69,16 @@ enum FixedEntryRequest: Encodable {
     case activate(FixedEntryIdentity, backendPort: Int, healthKey: Data)
     case renew(FixedEntryIdentity)
     case release(FixedEntryIdentity)
+
+    var operation: String {
+        switch self {
+        case .status: return "status"
+        case .begin: return "begin"
+        case .activate: return "activate"
+        case .renew: return "renew"
+        case .release: return "release"
+        }
+    }
 
     private enum CodingKeys: String, CodingKey {
         case op, epoch, generation, ticket
@@ -123,8 +152,19 @@ enum FixedEntryProtocol {
     }
 
     private static func response(_ result: CommandResult) throws -> Response {
+        let decoded: Response?
+        if !result.stdoutTruncated, result.stdout.utf8.count <= bodyLimit,
+           result.stdout.hasSuffix("\n"), !result.stdout.dropLast().contains("\n") {
+            decoded = try? JSONDecoder().decode(Response.self, from: Data(result.stdout.utf8))
+        } else {
+            decoded = nil
+        }
         if result.timedOut {
-            throw FixedEntryError("固定入口控制请求超时，等待连接恢复。", retryable: true)
+            if let decoded, !decoded.ok {
+                let error = remoteFailure(decoded.error)
+                if !error.canRetryRenewal { throw error }
+            }
+            throw FixedEntryError("固定入口控制请求超时，等待连接恢复。", retryable: true, canRetryRenewal: true)
         }
         if result.exitCode == 255 { throw FixedEntryError(failure: SSHFailure.classify(result.stderr)) }
         if let message = FixedEntryPythonFailure.message(result) { throw FixedEntryError(message) }
@@ -135,23 +175,12 @@ enum FixedEntryProtocol {
         if result.exitCode != 0, stderr.contains("traceback") || stderr.contains("syntaxerror") {
             throw FixedEntryError("远端 Python 无法运行固定入口程序；请确认所选解释器为 Python 3.9 或更高版本，并检查程序文件。")
         }
-        guard !result.stdoutTruncated, result.stdout.utf8.count <= bodyLimit,
-              result.stdout.hasSuffix("\n"), !result.stdout.dropLast().contains("\n"),
-              let decoded = try? JSONDecoder().decode(Response.self, from: Data(result.stdout.utf8)) else {
+        guard let decoded else {
             if result.exitCode == 255 { throw FixedEntryError(failure: SSHFailure.classify(result.stderr)) }
             throw invalidResponse
         }
         if !decoded.ok, result.exitCode != 255 {
-            switch decoded.error {
-            case "superseded", "stale_generation":
-                throw FixedEntryError("固定入口已被其他会话接管；已停止自动恢复，请确认后手动重连。")
-            case "runtime_missing", "helper_unavailable", "runtime_unsafe", "runtime_busy", "runtime_not_clean":
-                throw FixedEntryError("固定入口 helper 未就绪或私有运行目录不安全；请手动检查远端部署。")
-            case "epoch_mismatch", "stale_candidate", "stale_lease", "health_failed", "control_timeout", "control_io_failed":
-                throw FixedEntryError("固定入口租约或通道健康检查失效，等待连接恢复。", retryable: true)
-            default:
-                throw invalidResponse
-            }
+            throw remoteFailure(decoded.error)
         }
         guard result.exitCode == 0 else {
             if result.exitCode == 255 { throw FixedEntryError(failure: SSHFailure.classify(result.stderr)) }
@@ -159,6 +188,21 @@ enum FixedEntryProtocol {
         }
         guard decoded.ok else { throw invalidResponse }
         return decoded
+    }
+
+    private static func remoteFailure(_ code: String?) -> FixedEntryError {
+        switch code {
+        case "superseded", "stale_generation":
+            return FixedEntryError("固定入口已被其他会话接管；已停止自动恢复，请确认后手动重连。")
+        case "runtime_missing", "helper_unavailable", "runtime_unsafe", "runtime_busy", "runtime_not_clean":
+            return FixedEntryError("固定入口 helper 未就绪或私有运行目录不安全；请手动检查远端部署。")
+        case "health_unavailable", "control_timeout", "control_io_failed":
+            return FixedEntryError("固定入口控制或健康响应暂未确认。", retryable: true, canRetryRenewal: true)
+        case "epoch_mismatch", "stale_candidate", "stale_lease", "health_failed":
+            return FixedEntryError("固定入口租约或通道健康检查失效，等待连接恢复。", retryable: true)
+        default:
+            return invalidResponse
+        }
     }
 
     private static func validEpoch(_ epoch: String) -> Bool {

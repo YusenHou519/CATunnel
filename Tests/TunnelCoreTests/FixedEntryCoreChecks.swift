@@ -16,7 +16,10 @@ enum FixedEntryCoreChecks {
         ("fixed entry dynamic forwarding accepts only one valid allocated port", allocatedPort),
         ("child private input round-trips and closes EOF", inputRoundTrip),
         ("child rejects oversized private input before starting", inputLimit),
-        ("child private input survives broken pipe, early exit and cancellation", inputCleanup)
+        ("child private input survives broken pipe, early exit and cancellation", inputCleanup),
+        ("child timeout reports promptly and closes pipes retained by another process", inheritedPipeTimeout),
+        ("child timeout keeps the owned-process exit barrier through kill escalation", timeoutExitBarrier),
+        ("child nonblocking pipes preserve normal output and large private input", normalPipeDrain)
     ]
 
     private struct Failure: Error, CustomStringConvertible { let description: String }
@@ -281,5 +284,121 @@ enum FixedEntryCoreChecks {
         await command.waitForExit()
         await command.waitForExit()
         try expect(!command.isRunning && callbacks == 1, "Cancellation leaked a private writer or duplicated completion")
+    }
+
+    private static func pipeDescriptors() -> Set<Int32> {
+        var result: Set<Int32> = []
+        for descriptor in 0..<min(getdtablesize(), 8192) {
+            var info = stat()
+            if fstat(descriptor, &info) == 0 && info.st_mode & S_IFMT == S_IFIFO {
+                result.insert(descriptor)
+            }
+        }
+        return result
+    }
+
+    private static func inheritedPipeTimeout() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("catunnel-pipe-check-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = """
+        (trap '' TERM; : > "$1/ready"; exec /bin/sleep 2) &
+        printf '%s\\n' "$!" > "$1/holder.pid"
+        while [ ! -f "$1/ready" ]; do /bin/sleep 0.01; done
+        printf 'before-timeout\\n'
+        exec /bin/sleep 10
+        """
+        let baseline = pipeDescriptors()
+        let independent = ChildCommand(), command = ChildCommand()
+        var independentCompletions = 0, completions = 0, timeoutNotifications = 0
+        var timeoutAt: TimeInterval?, completed: CommandResult?
+        try independent.start(executable: "/bin/sleep", arguments: ["10"]) { _ in independentCompletions += 1 }
+        let began = ProcessInfo.processInfo.systemUptime
+        do {
+            try command.start(executable: "/bin/sh", arguments: ["-c", script, "fixture", directory.path], timeout: 0.2,
+                              onTimeout: {
+                                  timeoutNotifications += 1
+                                  timeoutAt = ProcessInfo.processInfo.systemUptime - began
+                              }) { result in
+                completions += 1
+                completed = result
+            }
+        } catch {
+            independent.stop()
+            await independent.waitForExit()
+            throw error
+        }
+        await command.waitForExit()
+        let elapsed = ProcessInfo.processInfo.systemUptime - began
+        let otherStillRunning = independent.isRunning && independentCompletions == 0
+        independent.stop()
+        await independent.waitForExit()
+        await command.waitForExit()
+        let holderText = try String(contentsOf: directory.appendingPathComponent("holder.pid"), encoding: .utf8)
+        guard let holder = Int32(holderText.trimmingCharacters(in: .whitespacesAndNewlines)), holder > 0 else {
+            throw Failure(description: "Pipe holder fixture did not report its owned PID")
+        }
+        let holderStillRunning = Darwin.kill(holder, 0) == 0
+        // Keep new descriptors open past the old holder's exit to catch late closure after FD reuse.
+        let sentinel = Pipe()
+        try sentinel.fileHandleForWriting.write(contentsOf: Data("intact".utf8))
+        let remaining = max(0, 2.2 - (ProcessInfo.processInfo.systemUptime - began))
+        try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        let sentinelIntact = fcntl(sentinel.fileHandleForReading.fileDescriptor, F_GETFD) >= 0
+            && fcntl(sentinel.fileHandleForWriting.fileDescriptor, F_GETFD) >= 0
+        try sentinel.fileHandleForWriting.close()
+        let sentinelData = sentinel.fileHandleForReading.readDataToEndOfFile()
+        try sentinel.fileHandleForReading.close()
+        try expect(timeoutNotifications == 1 && (timeoutAt ?? 10) < 0.8,
+                   "Timeout notification waited for inherited pipe EOF")
+        try expect(elapsed < 1.5 && holderStillRunning,
+                   "Completion waited for a different process to release the child's pipes")
+        try expect(completions == 1 && completed?.timedOut == true && !command.isRunning,
+                   "Timeout lost its result, duplicated completion, or returned before owned child exit")
+        try expect(completed?.stdout == "before-timeout\n", "Stopped pipe drain lost already-written output")
+        try expect(otherStillRunning && independentCompletions == 1, "One timed-out child interrupted an unrelated command")
+        try expect(sentinelIntact && sentinelData == Data("intact".utf8), "Late pipe cleanup closed a reused descriptor")
+        try expect(pipeDescriptors() == baseline, "Timed-out command leaked an owned pipe descriptor")
+        try expect(Darwin.kill(holder, 0) != 0 && errno == ESRCH, "Pipe holder fixture survived its self-imposed lifetime")
+    }
+
+    private static func timeoutExitBarrier() async throws {
+        let command = ChildCommand()
+        var timeoutNotifications = 0, completions = 0
+        var completed: CommandResult?
+        let began = ProcessInfo.processInfo.systemUptime
+        try command.start(executable: "/bin/sh", arguments: ["-c", "trap '' TERM; exec /bin/sleep 10"], timeout: 0.2,
+                          onTimeout: { timeoutNotifications += 1 }) {
+            completions += 1
+            completed = $0
+        }
+        await command.waitForExit()
+        let elapsed = ProcessInfo.processInfo.systemUptime - began
+        try expect(elapsed >= 1 && elapsed < 2.5 && !command.isRunning,
+                   "Pipe cancellation bypassed actual child exit or failed to escalate an ignored TERM")
+        try expect(completed?.timedOut == true && completed?.exitCode == SIGKILL && completions == 1 && timeoutNotifications == 1,
+                   "Kill escalation lost timeout state or duplicated its callbacks")
+    }
+
+    private static func normalPipeDrain() async throws {
+        let command = ChildCommand()
+        let stdout = String(repeating: "o", count: 90_000), stderr = String(repeating: "e", count: 16_000)
+        var completed: CommandResult?
+        var unexpectedTimeouts = 0
+        try command.start(executable: "/bin/sh", arguments: ["-c", "printf '%s' \"$1\"; printf '%s' \"$2\" >&2", "fixture", stdout, stderr],
+                          timeout: 3, stdoutLimit: 131_072, onTimeout: { unexpectedTimeouts += 1 }) { completed = $0 }
+        await command.waitForExit()
+        try expect(completed?.exitCode == 0 && completed?.timedOut == false && completed?.stdoutTruncated == false,
+                   "Normal output drain failed or became truncated")
+        try expect(completed?.stdout == stdout && completed?.stderr == stderr && unexpectedTimeouts == 0,
+                   "Normal nonblocking drain lost stdout/stderr bytes or reported a timeout")
+        let copying = ChildCommand()
+        let payload = Data(String(repeating: "p", count: 262_144).utf8)
+        var copied: CommandResult?
+        try copying.start(executable: "/bin/cat", arguments: [], timeout: 3, stdoutLimit: payload.count,
+                          stdin: payload, stdinLimit: payload.count) { copied = $0 }
+        await copying.waitForExit()
+        try expect(copied?.exitCode == 0 && copied?.timedOut == false && Data((copied?.stdout ?? "").utf8) == payload,
+                   "Nonblocking private input stalled or lost bytes under backpressure")
     }
 }

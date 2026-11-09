@@ -123,6 +123,11 @@ An old SSH session can retain its temporary port without blocking the new connec
 A missing helper, unsafe runtime, or mismatched entry port fails explicitly; port mismatch is rejected before takeover.
 The ordinary setup check still covers only basic dependencies; connection establishment verifies the helper and channel.
 
+Both ends allow ten minutes without data on fixed-entry streams by default. Unconfirmed control or health
+responses permit bounded renewal retries only within the previously confirmed lease; they never extend it.
+Invalid health proofs, expiry, takeover, and manual stop still close the old route. Control logs include
+operation names, durations, and timeout state without lease credentials.
+
 For a saved profile with fixed entry enabled, the panel and connection details provide **Check fixed entry** (`检查固定入口`).
 An independent SSH session checks the local proxy TCP port, SSH, selected Python, helper, fixed entry, and active backend.
 This is available while connected and does not reuse or stop the tunnel, install, reconnect, request a lease, or change settings.

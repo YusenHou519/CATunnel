@@ -21,6 +21,7 @@ class Backend:
     def __init__(self):
         self.key = secrets.token_hex(32)
         self.valid = True
+        self.health_reply = None
         self.gate = asyncio.Event()
         self.gate.set()
         self.health_started = asyncio.Event()
@@ -42,7 +43,8 @@ class Backend:
                 await self.gate.wait()
                 challenge = first[len(relay.HEALTH_PREFIX):-1]
                 digest = hmac.new(bytes.fromhex(self.key), challenge, hashlib.sha256).hexdigest().encode("ascii")
-                writer.write(relay.HEALTH_PREFIX + (digest if self.valid else b"0" * 64) + b"\n")
+                writer.write(self.health_reply if self.health_reply is not None else
+                             relay.HEALTH_PREFIX + (digest if self.valid else b"0" * 64) + b"\n")
                 await writer.drain()
             elif self.reply_on_eof:
                 writer.write(b"reply:" + first + await reader.read())
@@ -248,6 +250,116 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertIsNone(self.service.active)
 
+    async def test_transient_health_timeout_preserves_stream_and_can_renew_same_identity(self):
+        backend = await self.backend()
+        identity = await self.activate(backend)
+        route, expiry = self.service.active, self.service.active.expires
+        reader, writer = await self.connect()
+        writer.write(b"before-timeout\n")
+        await writer.drain()
+        self.assertEqual(await reader.readline(), b"before-timeout\n")
+        backend.gate.clear()
+        with mock.patch.object(relay, "HEALTH_TIMEOUT", 0.05):
+            result = await self.service.control(dict(identity, op="renew"))
+        self.assertEqual(result.get("error"), "health_unavailable")
+        self.assertIs(self.service.active, route)
+        self.assertEqual(route.expires, expiry)
+        writer.write(b"still-active\n")
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.readline(), 1), b"still-active\n")
+        backend.gate.set()
+        result = await self.service.control(dict(identity, op="renew"))
+        self.assertTrue(result["ok"])
+        self.assertIs(self.service.active, route)
+        self.assertGreater(route.expires, expiry)
+
+    async def test_temporarily_unavailable_backend_preserves_existing_stream_and_expiry(self):
+        backend = await self.backend()
+        identity = await self.activate(backend)
+        route, expiry = self.service.active, self.service.active.expires
+        reader, writer = await self.connect()
+        writer.write(b"before-refusal\n")
+        await writer.drain()
+        self.assertEqual(await reader.readline(), b"before-refusal\n")
+        backend.server.close()
+        await backend.server.wait_closed()
+        result = await self.service.control(dict(identity, op="renew"))
+        self.assertEqual(result.get("error"), "health_unavailable")
+        self.assertIs(self.service.active, route)
+        self.assertEqual(route.expires, expiry)
+        writer.write(b"existing-connection\n")
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.readline(), 1), b"existing-connection\n")
+
+    async def test_transient_health_failure_does_not_keep_stream_past_original_lease(self):
+        service = await self.make_relay("transient-expiry", lease_seconds=0.35)
+        backend = await self.backend()
+        identity = await self.activate(backend, service=service)
+        route, expiry = service.active, service.active.expires
+        reader, writer = await self.connect(service)
+        writer.write(b"expires\n")
+        await writer.drain()
+        self.assertEqual(await reader.readline(), b"expires\n")
+        backend.gate.clear()
+        with mock.patch.object(relay, "HEALTH_TIMEOUT", 0.05):
+            result = await service.control(dict(identity, op="renew"))
+        self.assertEqual(result.get("error"), "health_unavailable")
+        self.assertIs(service.active, route)
+        self.assertEqual(route.expires, expiry)
+        self.assertEqual(await asyncio.wait_for(reader.read(1), 1), b"")
+        self.assertIsNone(service.active)
+        self.assertEqual((await service.control(dict(identity, op="renew"))).get("error"), "stale_lease")
+        self.assertTrue(service.entry.is_serving())
+
+    async def test_invalid_health_proofs_revoke_route_and_close_stream(self):
+        backend = await self.backend()
+        for response in (b"wrong-proof\n", b"x" * 300 + b"\n", b""):
+            with self.subTest(response_length=len(response)):
+                backend.health_reply = None
+                identity = await self.activate(backend)
+                reader, writer = await self.connect()
+                writer.write(b"before-invalid-proof\n")
+                await writer.drain()
+                self.assertEqual(await reader.readline(), b"before-invalid-proof\n")
+                backend.health_reply = response
+                result = await self.service.control(dict(identity, op="renew"))
+                self.assertEqual(result.get("error"), "health_failed")
+                self.assertIsNone(self.service.active)
+                self.assertEqual(await asyncio.wait_for(reader.read(1), 1), b"")
+
+    async def test_health_reply_after_expiry_cannot_revive_lease(self):
+        backend = await self.backend()
+        identity = await self.activate(backend)
+        backend.health_started.clear()
+        backend.gate.clear()
+        self.service.active.expires = time.monotonic() + 0.05
+        checking = asyncio.create_task(self.service.control(dict(identity, op="renew")))
+        await asyncio.wait_for(backend.health_started.wait(), 1)
+        await asyncio.sleep(0.08)
+        backend.gate.set()
+        self.assertEqual((await checking).get("error"), "stale_lease")
+        self.assertIsNone(self.service.active)
+
+    async def test_default_idle_tolerates_long_first_response_but_still_expires(self):
+        service = await self.make_relay("default-idle", lease_seconds=1000)
+        backend = await self.backend()
+        await self.activate(backend, service=service)
+        reader, writer = await self.connect(service)
+        writer.write(b"request\n")
+        await writer.drain()
+        self.assertEqual(await reader.readline(), b"request\n")
+        offset = 61
+        clock = mock.Mock(wraps=time)
+        clock.monotonic.side_effect = lambda: time.monotonic() + offset
+        with mock.patch.object(relay, "time", clock):
+            await asyncio.sleep(0.3)
+            writer.write(b"late-response\n")
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.readline(), 1), b"late-response\n")
+            offset = 662
+            self.assertEqual(await asyncio.wait_for(reader.read(1), 1), b"")
+        self.assertIsNotNone(service.active)
+
     async def test_half_close_and_shared_idle_deadline(self):
         backend = await self.backend()
         backend.reply_on_eof = True
@@ -270,9 +382,9 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         backend = await self.backend()
         backend.gate.clear()
         pending = await self.begin()
-        with mock.patch.object(relay, "IO_TIMEOUT", 0.1):
+        with mock.patch.object(relay, "HEALTH_TIMEOUT", 0.1):
             result = await self.service.control(dict(pending, op="activate", backend_port=backend.port, health_key=backend.key))
-        self.assertEqual(result.get("error"), "health_failed")
+        self.assertEqual(result.get("error"), "health_unavailable")
 
     async def test_duplicate_runtime_and_unknown_residue_are_preserved(self):
         socket_inode = (self.service.runtime / "control.sock").stat().st_ino
@@ -350,6 +462,31 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         await self.service.close()
         self.assertEqual(await asyncio.wait_for(reader.read(1), 1), b"")
         self.assertFalse(self.service.control_tasks)
+
+    async def test_control_cli_response_budget_covers_health_timeout(self):
+        backend = await self.backend()
+        identity = await self.activate(backend)
+        route, expiry = self.service.active, self.service.active.expires
+        backend.gate.clear()
+        code = ("import sys; sys.path.insert(0, " + repr(str(Path(relay.__file__).parent)) + "); "
+                "import relay; relay.IO_TIMEOUT = 0.1; relay.CONTROL_RESPONSE_TIMEOUT = 0.4; "
+                "sys.exit(relay.main())")
+        process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-c", code, "control",
+            "--runtime-dir", str(self.service.runtime), stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            with mock.patch.object(relay, "HEALTH_TIMEOUT", 0.1):
+                output, errors = await asyncio.wait_for(
+                    process.communicate(json.dumps(dict(identity, op="renew")).encode("utf-8") + b"\n"), 3)
+            self.assertEqual(json.loads(output).get("error"), "health_unavailable")
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(errors, b"")
+            self.assertIs(self.service.active, route)
+            self.assertEqual(route.expires, expiry)
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
 
     async def test_data_and_control_concurrency_are_bounded(self):
         backend = await self.backend()

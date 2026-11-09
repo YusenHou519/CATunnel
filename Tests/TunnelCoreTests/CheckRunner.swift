@@ -58,7 +58,7 @@ struct CheckRunner {
             ("response capture is bounded and reports truncation", boundedCapture),
             ("invalid start and idempotent stop", invalidStart)
         ] + SetupChecks.checks + Ping0Checks.checks + FixedEntryProfileChecks.checks + RemoteInspectionChecks.checks
-            + FixedEntryGatewayChecks.checks + FixedEntryCoreChecks.checks + FixedEntryInstallerChecks.checks
+            + FixedEntryGatewayChecks.checks + FixedEntryCoreChecks.checks + FixedEntryRenewalChecks.checks + FixedEntryInstallerChecks.checks
         var failures = 0
         for (name, check) in checks {
             do { try await check(); print("PASS: \(name)") }

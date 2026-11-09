@@ -162,6 +162,14 @@ private final class GatewayStopFlag: @unchecked Sendable {
     var isFinished: Bool { lock.lock(); defer { lock.unlock() }; return finished }
 }
 
+private final class GatewayIdleClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var elapsed: TimeInterval = 0
+
+    var now: TimeInterval { lock.lock(); defer { lock.unlock() }; return elapsed }
+    func advance(_ seconds: TimeInterval) { lock.lock(); elapsed += seconds; lock.unlock() }
+}
+
 private func gatewayStopped(_ gateway: FixedEntryGateway) async throws {
     gateway.stop()
     let flag = GatewayStopFlag()
@@ -193,6 +201,7 @@ enum FixedEntryGatewayChecks {
         ("native gateway preserves fragmented CONNECT and SOCKS bytes and half-close", transparentTraffic),
         ("native gateway drains a large response under backpressure after request EOF", largeResponse),
         ("native gateway shares idle activity across both transfer directions", sharedIdle),
+        ("native gateway default keeps delayed responses past one minute and still bounds idle streams", delayedResponse),
         ("native gateway closes an actually idle transfer", idleExpiry),
         ("native gateway stop releases partial-prefix connections and every owned socket", stopCleanup),
         ("native gateway connection limit rejects excess streams without damaging the first", connectionLimit),
@@ -360,6 +369,37 @@ enum FixedEntryGatewayChecks {
             let elapsed = ProcessInfo.processInfo.systemUptime - start
             try gatewayRequire(elapsed >= 0.15 && elapsed < 1.5, "idle deadline was not applied to the transfer")
             try gatewayRequire(try upstream.readAll(timeout: 2).isEmpty, "idle gateway did not close its upstream")
+            try await gatewayStopped(gateway)
+        }.value
+    }
+
+    static func delayedResponse() async throws {
+        try await Task.detached {
+            let proxy = try GatewayCheckSocket.listener()
+            defer { proxy.close() }
+            let clock = GatewayIdleClock()
+            let gateway = try FixedEntryGateway(localPort: proxy.port, healthKey: key, idleClock: { clock.now })
+            defer { gateway.stop() }
+            let client = try GatewayCheckSocket.connect(gateway.port)
+            defer { client.close() }
+            try client.write(Data([71]))
+            let upstream = try proxy.accept()
+            defer { upstream.close() }
+            _ = try upstream.readExactly(1)
+            try upstream.write(Data([1]))
+            _ = try client.readExactly(1)
+
+            clock.advance(75)
+            try gatewayRequire(try !client.readable(within: 0.35), "default gateway closed while waiting for a delayed response")
+            let response = Data("response-after-seventy-five-seconds".utf8)
+            try upstream.write(response)
+            try gatewayRequire(try client.readExactly(response.count) == response, "delayed response was discarded")
+            try client.write(Data([2]))
+            try gatewayRequire(try upstream.readExactly(1) == Data([2]), "delayed response damaged subsequent request bytes")
+
+            clock.advance(601)
+            try gatewayRequire(try client.readAll(timeout: 2).isEmpty, "default idle bound returned unexpected bytes")
+            try gatewayRequire(try upstream.readAll(timeout: 2).isEmpty, "default idle bound left its upstream open")
             try await gatewayStopped(gateway)
         }.value
     }

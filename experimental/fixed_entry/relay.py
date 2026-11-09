@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 from dataclasses import dataclass
+from enum import Enum
 import fcntl
 import hashlib
 import hmac
@@ -19,6 +20,8 @@ import time
 
 LINE_LIMIT = 4096
 IO_TIMEOUT = 3.0
+HEALTH_TIMEOUT = 3.0
+CONTROL_RESPONSE_TIMEOUT = 4.0
 MAX_DATA = 64
 MAX_CONTROL = 16
 BUFFER_SIZE = 65536
@@ -28,6 +31,12 @@ HEX_KEY = re.compile(r"[0-9a-f]{64}\Z")
 
 class RelayError(Exception):
     pass
+
+
+class HealthResult(Enum):
+    HEALTHY = "healthy"
+    UNAVAILABLE = "unavailable"
+    INVALID_PROOF = "invalid_proof"
 
 
 def validate_runtime(path, create=False):
@@ -68,9 +77,9 @@ def decode_line(line):
     return result
 
 
-async def read_line(reader):
+async def read_line(reader, timeout=None):
     try:
-        line = await asyncio.wait_for(reader.readline(), IO_TIMEOUT)
+        line = await asyncio.wait_for(reader.readline(), IO_TIMEOUT if timeout is None else timeout)
     except ValueError:
         raise RelayError("line_too_long") from None
     except asyncio.TimeoutError:
@@ -99,7 +108,7 @@ class Route(Candidate):
 
 
 class Relay:
-    def __init__(self, runtime_dir, port=0, lease_seconds=20, idle_seconds=60):
+    def __init__(self, runtime_dir, port=0, lease_seconds=20, idle_seconds=600):
         if not integer(port, 0, 65535) or not 0 < lease_seconds <= 3600 or not 0 < idle_seconds <= 3600:
             raise RelayError("configuration_invalid")
         self.runtime = Path(runtime_dir)
@@ -207,13 +216,16 @@ class Relay:
                 await writer.drain()
                 expected = hmac.new(bytes.fromhex(health_key), challenge, hashlib.sha256).hexdigest().encode("ascii")
                 response = await reader.readline()
-                return hmac.compare_digest(response, HEALTH_PREFIX + expected + b"\n")
+                return (HealthResult.HEALTHY if hmac.compare_digest(response, HEALTH_PREFIX + expected + b"\n")
+                        else HealthResult.INVALID_PROOF)
             finally:
                 writer.close()
         try:
-            return await asyncio.wait_for(check(), IO_TIMEOUT)
-        except (OSError, ValueError, asyncio.TimeoutError):
-            return False
+            return await asyncio.wait_for(check(), HEALTH_TIMEOUT)
+        except (OSError, asyncio.TimeoutError):
+            return HealthResult.UNAVAILABLE
+        except ValueError:
+            return HealthResult.INVALID_PROOF
 
     async def control(self, request):
         try:
@@ -240,13 +252,15 @@ class Relay:
                 port, health_key = request.get("backend_port"), request.get("health_key")
                 if not integer(port, 1, 65535) or port == self.port or not key(health_key):
                     raise RelayError("backend_invalid")
-                healthy = await self._health(port, health_key)
+                health = await self._health(port, health_key)
                 self._expire()
                 if self.closed or self.pending is not candidate:
                     if not self.closed:
                         self._identity(request, self.pending, "stale_candidate")
                     raise RelayError("stale_candidate")
-                if not healthy:
+                if health is HealthResult.UNAVAILABLE:
+                    raise RelayError("health_unavailable")
+                if health is not HealthResult.HEALTHY:
                     raise RelayError("health_failed")
                 previous = self.active
                 self.active = Route(candidate.generation, candidate.ticket, time.monotonic() + self.lease_seconds, port, health_key)
@@ -260,13 +274,15 @@ class Relay:
                 if op == "release":
                     self._retire(route)
                     return dict(ok=True)
-                healthy = await self._health(route.backend_port, route.health_key)
+                health = await self._health(route.backend_port, route.health_key)
                 self._expire()
                 if self.closed or self.active is not route:
                     if not self.closed:
                         self._identity(request, self.active, "stale_lease")
                     raise RelayError("stale_lease")
-                if not healthy:
+                if health is HealthResult.UNAVAILABLE:
+                    raise RelayError("health_unavailable")
+                if health is not HealthResult.HEALTHY:
                     self._retire(route)
                     raise RelayError("health_failed")
                 route.expires = time.monotonic() + self.lease_seconds
@@ -391,7 +407,7 @@ async def cli(args):
     try:
         writer.write(line)
         await asyncio.wait_for(writer.drain(), IO_TIMEOUT)
-        response = await read_line(reader)
+        response = await read_line(reader, timeout=CONTROL_RESPONSE_TIMEOUT)
         if type(decode_line(response).get("ok")) is not bool:
             raise RelayError("response_invalid")
         sys.stdout.buffer.write(response)

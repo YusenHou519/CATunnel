@@ -35,6 +35,8 @@ public final class TunnelController {
         var fixedGateway: FixedEntryGateway?
         var gatewayStopTask: Task<Void, Never>?
         var fixedRenewTask: Task<Void, Never>?
+        var fixedLeaseTask: Task<Void, Never>?
+        var fixedLeaseWindow: FixedEntryLeaseWindow?
         var fixedReleaseTask: Task<Void, Never>?
         var fixedLease: FixedEntryIdentity?
         var fixedFence: FixedEntryFence?
@@ -115,6 +117,8 @@ public final class TunnelController {
         session.proxyTask?.cancel(); session.proxyTask = nil
         session.proxyRunID = nil
         session.fixedRenewTask?.cancel(); session.fixedRenewTask = nil
+        session.fixedLeaseTask?.cancel(); session.fixedLeaseTask = nil
+        session.fixedLeaseWindow = nil
         for command in session.probes.values { command.stop() }
         stopFixedGateway(session)
         if session.fixedReleaseTask == nil {
@@ -392,6 +396,8 @@ public final class TunnelController {
                 session.proxyTask?.cancel(); session.proxyTask = nil
                 session.proxyRunID = nil
                 session.fixedRenewTask?.cancel(); session.fixedRenewTask = nil
+                session.fixedLeaseTask?.cancel(); session.fixedLeaseTask = nil
+                session.fixedLeaseWindow = nil
                 session.fixedLease = nil
                 for command in session.probes.values { command.stop() }
                 self.stopFixedGateway(session)
@@ -495,8 +501,17 @@ public final class TunnelController {
                                  timeout: TimeInterval = 6, retiring: Bool = false) async throws -> CommandResult {
         let arguments = try SSHCommands.fixedEntryControl(session.profile, socket: session.socket)
         let input = try FixedEntryProtocol.input(request)
-        return await runProbe(session, arguments: arguments, timeout: timeout,
-                              stdoutLimit: FixedEntryProtocol.bodyLimit, stdin: input, retiring: retiring)
+        let started = ProcessInfo.processInfo.systemUptime
+        let result = await runProbe(session, arguments: arguments, timeout: timeout,
+            stdoutLimit: FixedEntryProtocol.bodyLimit, stdin: input, retiring: retiring, onTimeout: { [weak self, weak session] in
+                guard let self, let session else { return }
+                self.log(session.profile.id, "固定入口控制 op=\(request.operation) 已到 \(String(format: "%.2f", timeout)) 秒限时，正在结束本次控制子进程。")
+            })
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        if request.operation != "renew" || result.timedOut || result.exitCode != 0 || elapsed >= 1 {
+            log(session.profile.id, "固定入口控制 op=\(request.operation) 用时 \(String(format: "%.3f", elapsed)) 秒，退出=\(result.exitCode)，超时=\(result.timedOut)。")
+        }
+        return result
     }
 
     private func establishFixedEntry(_ session: Session) async {
@@ -525,10 +540,12 @@ public final class TunnelController {
             let identity = try FixedEntryProtocol.candidate(begun, after: baseline)
             session.fixedFence = .init(epoch: identity.epoch, generation: identity.generation)
             session.fixedLease = identity
+            let activationStarted = ProcessInfo.processInfo.systemUptime
             let activated = try await runFixedControl(session,
                 request: .activate(identity, backendPort: backendPort, healthKey: healthKey))
             try requireFixedSession(session)
             let seconds = try FixedEntryProtocol.activated(activated, identity: identity, backendPort: backendPort)
+            try confirmFixedLease(session, identity: identity, requestStartedAt: activationStarted, seconds: seconds)
             session.status = .init(phase: .connected,
                 message: "固定入口 127.0.0.1:\(session.profile.remotePort) 已连接 · 通道及本机代理端口已验证", connectedAt: Date())
             session.retryPolicy.didConnect()
@@ -554,9 +571,38 @@ public final class TunnelController {
                     try await Task.sleep(nanoseconds: UInt64(seconds / 3 * 1_000_000_000))
                     try self.requireFixedSession(session)
                     guard let identity = session.fixedLease else { return }
-                    let result = try await self.runFixedControl(session, request: .renew(identity))
-                    try self.requireFixedSession(session)
-                    seconds = try FixedEntryProtocol.renewed(result)
+                    var retries = 0
+                    while true {
+                        guard let window = session.fixedLeaseWindow,
+                              let timeout = window.requestTimeout(at: ProcessInfo.processInfo.systemUptime) else {
+                            throw FixedEntryError("固定入口已确认租约即将到期，正在重建连接。", retryable: true)
+                        }
+                        let started = ProcessInfo.processInfo.systemUptime
+                        do {
+                            let result = try await self.runFixedControl(session, request: .renew(identity), timeout: timeout)
+                            try self.requireFixedSession(session)
+                            let renewedSeconds = try FixedEntryProtocol.renewed(result)
+                            try self.confirmFixedLease(session, identity: identity, requestStartedAt: started, seconds: renewedSeconds)
+                            seconds = renewedSeconds
+                            if retries > 0 {
+                                session.status.message = "固定入口 127.0.0.1:\(session.profile.remotePort) 已连接 · 续租已恢复"
+                                self.publish(session)
+                                self.log(session.profile.id, "原租期内续租已恢复，保留现有数据连接。")
+                            }
+                            break
+                        } catch {
+                            try self.requireFixedSession(session)
+                            guard let failure = error as? FixedEntryError, failure.canRetryRenewal,
+                                  retries < 2, session.fixedLease == identity,
+                                  session.fixedLeaseWindow == window,
+                                  window.requestTimeout(at: ProcessInfo.processInfo.systemUptime + 0.25) != nil else { throw error }
+                            retries += 1
+                            self.log(session.profile.id, "固定入口续租响应暂未确认，原租期内重试 \(retries)/2；op=renew，不延长未确认租期。")
+                            session.status.message = "固定入口续租响应暂未确认，正在原租期内重试…"
+                            self.publish(session)
+                            try await Task.sleep(nanoseconds: 250_000_000)
+                        }
+                    }
                 }
             } catch is CancellationError {
                 return
@@ -566,19 +612,41 @@ public final class TunnelController {
         }
     }
 
+    private func confirmFixedLease(_ session: Session, identity: FixedEntryIdentity,
+                                   requestStartedAt: TimeInterval, seconds: TimeInterval) throws {
+        guard session.fixedLease == identity, let master = session.master else { throw CancellationError() }
+        let window = FixedEntryLeaseWindow(requestStartedAt: requestStartedAt, leaseSeconds: seconds)
+        let remaining = window.deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0 else { throw FixedEntryError("固定入口租约回复过晚，正在重建连接。", retryable: true) }
+        session.fixedLeaseTask?.cancel()
+        session.fixedLeaseWindow = window
+        session.fixedLeaseTask = Task { [weak self, weak session, weak master] in
+            let wait = max(0, window.deadline - ProcessInfo.processInfo.systemUptime)
+            do { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+            catch { return }
+            guard let self, let session, let master, self.isCurrent(session),
+                  session.master === master, session.fixedLease == identity,
+                  session.fixedLeaseWindow == window else { return }
+            self.failFixedEntry(session, error: FixedEntryError("固定入口已确认租期已到，停止旧通道并等待恢复。", retryable: true))
+        }
+    }
+
     private func failFixedEntry(_ session: Session, error: Error) {
         guard isCurrent(session), session.master?.isRunning == true else { return }
         let failure = (error as? FixedEntryError)?.failure
             ?? .init(message: "固定入口控制请求失败，请检查 helper 配置。", retryable: false)
         session.forcedFailure = failure
         log(session.profile.id, failure.message)
+        session.fixedRenewTask?.cancel(); session.fixedRenewTask = nil
+        session.fixedLeaseTask?.cancel(); session.fixedLeaseTask = nil
+        session.fixedLeaseWindow = nil
         stopFixedGateway(session)
         session.master?.stop()
     }
 
     private func runProbe(_ session: Session, arguments: [String], timeout: TimeInterval,
                           stdoutLimit: Int = 32_768, stdin: Data? = nil,
-                          retiring: Bool = false) async -> CommandResult {
+                          retiring: Bool = false, onTimeout: (() -> Void)? = nil) async -> CommandResult {
         guard (retiring ? !session.desired : isCurrent(session)), !Task.isCancelled, session.master?.isRunning == true else {
             return .init(exitCode: 255, stdout: "", stderr: "隧道已经关闭。")
         }
@@ -587,7 +655,7 @@ public final class TunnelController {
         return await withCheckedContinuation { continuation in
             do {
                 try command.start(arguments: executionContext.arguments(arguments), timeout: timeout,
-                                  stdoutLimit: stdoutLimit, stdin: stdin) { result in
+                                  stdoutLimit: stdoutLimit, stdin: stdin, onTimeout: onTimeout) { result in
                     session.probes.removeValue(forKey: token)
                     if !session.desired && session.probes.isEmpty && session.master?.isRunning != true {
                         self.cleanup(session)

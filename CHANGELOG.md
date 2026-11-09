@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Allow ten minutes without data in fixed-entry streams, and bound stopped control
+  process I/O cleanup even when another process retains its output pipes.
+- Retry unconfirmed fixed-entry renewals only within the last confirmed lease;
+  keep expiry and takeover checks, distinguish unavailable health responses from
+  invalid proofs, and record credential-free control operation timings.
 - Close owned SSH processes on system sleep and resume eligible requested connections
   on wake, without restarting manually stopped or terminally failed connections.
 - Add an optional, default-off continuous forwarding recovery setting: after the

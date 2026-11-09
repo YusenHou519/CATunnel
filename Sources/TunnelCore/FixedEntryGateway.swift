@@ -12,6 +12,7 @@ final class FixedEntryGateway: @unchecked Sendable {
     private let localPort: Int
     private let healthKey: Data
     private let idleTimeout: TimeInterval
+    private let idleClock: @Sendable () -> TimeInterval
     private let connectionLimit: Int
     private let lock = NSLock()
     private var source: DispatchSourceRead?
@@ -59,8 +60,9 @@ final class FixedEntryGateway: @unchecked Sendable {
         }
     }
 
-    init(localPort: Int, healthKey: Data, idleTimeout: TimeInterval = 60,
-         connectionLimit: Int = 64) throws {
+    init(localPort: Int, healthKey: Data, idleTimeout: TimeInterval = 600,
+         connectionLimit: Int = 64,
+         idleClock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         guard (1...65535).contains(localPort), healthKey.count == 32,
               idleTimeout.isFinite, idleTimeout > 0, (1...64).contains(connectionLimit) else {
             throw FixedEntryGatewayError.invalidConfiguration
@@ -68,6 +70,7 @@ final class FixedEntryGateway: @unchecked Sendable {
         self.localPort = localPort
         self.healthKey = healthKey
         self.idleTimeout = idleTimeout
+        self.idleClock = idleClock
         self.connectionLimit = connectionLimit
         let listener = try Self.makeListener(excluding: localPort)
         port = listener.port
@@ -237,7 +240,7 @@ final class FixedEntryGateway: @unchecked Sendable {
         var buffers = [Data(), Data()]
         var readEOF = [false, false]
         var writeEOF = [false, false]
-        var activity = Self.now
+        var activity = idleClock()
         let limit = 65_536
         while !connection.isStopped {
             for index in 0..<2 where readEOF[index] && buffers[index].isEmpty && !writeEOF[1 - index] {
@@ -245,7 +248,7 @@ final class FixedEntryGateway: @unchecked Sendable {
                 writeEOF[1 - index] = true
             }
             if readEOF.allSatisfy({ $0 }) && buffers.allSatisfy({ $0.isEmpty }) { return }
-            guard Self.now - activity < idleTimeout else { throw FixedEntryGatewayError.timedOut }
+            guard idleClock() - activity < idleTimeout else { throw FixedEntryGatewayError.timedOut }
             var polling = (0..<2).map { index -> pollfd in
                 var events: Int16 = 0
                 if !readEOF[index] && buffers[index].count < limit { events |= Int16(POLLIN) }
@@ -253,7 +256,7 @@ final class FixedEntryGateway: @unchecked Sendable {
                 // poll reports HUP even for events=0; ignore a finished direction until it has work.
                 return pollfd(fd: events == 0 ? -1 : descriptors[index], events: events, revents: 0)
             }
-            let remaining = max(1, min(250, Int((idleTimeout - (Self.now - activity)) * 1000)))
+            let remaining = max(1, min(250, Int((idleTimeout - (idleClock() - activity)) * 1000)))
             let result = Darwin.poll(&polling, 2, Int32(remaining))
             if result < 0 {
                 if errno == EINTR { continue }
@@ -268,7 +271,7 @@ final class FixedEntryGateway: @unchecked Sendable {
                     }
                     if count > 0 {
                         buffers[1 - index].removeFirst(count)
-                        activity = Self.now
+                        activity = idleClock()
                     } else if count < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
                         throw FixedEntryGatewayError.closed
                     }
@@ -278,7 +281,7 @@ final class FixedEntryGateway: @unchecked Sendable {
                     let count = bytes.withUnsafeMutableBytes { Darwin.recv(descriptors[index], $0.baseAddress, $0.count, 0) }
                     if count > 0 {
                         buffers[index].append(contentsOf: bytes.prefix(count))
-                        activity = Self.now
+                        activity = idleClock()
                     } else if count == 0 {
                         readEOF[index] = true
                     } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
