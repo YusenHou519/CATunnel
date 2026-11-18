@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.6.1-preview.1 (build 7) — 2026-11-18
 
 - Sync server connection settings from concrete aliases in `~/.ssh/config`.
-  Scan once from Settings or enable automatic sync.
+  Scan and update once from Settings, even when automatic sync is off.
 - Choose which servers appear in the menu-bar panel while managing all servers
   in the connection window.
 - Allow ten minutes without data in fixed-entry streams, and bound stopped control

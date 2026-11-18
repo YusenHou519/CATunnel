@@ -8,8 +8,9 @@ The current UI is in Chinese. See [validation boundaries](VALIDATION.md) for obs
 
 ## Download and install
 
-1. Download a preview ZIP from [GitHub Releases](https://github.com/YusenHou519/CATunnel/releases):
-   choose `arm64` for Apple Silicon or `x86_64` for Intel. Source archives and build-information JSON are optional.
+1. Download [v0.6.1-preview.1 (build 7)](https://github.com/YusenHou519/CATunnel/releases/tag/v0.6.1-preview.1):
+   [Apple Silicon (arm64) ZIP](https://github.com/YusenHou519/CATunnel/releases/download/v0.6.1-preview.1/CATunnel-0.6.1-build7-macos-arm64-preview.zip) or
+   [Intel (x86_64) ZIP](https://github.com/YusenHou519/CATunnel/releases/download/v0.6.1-preview.1/CATunnel-0.6.1-build7-macos-x86_64-preview.zip). Source archives and build-information JSON are optional.
 2. Extract the ZIP, move `CATunnel.app` to Applications, and double-click it.
 3. Click the circular two-arrow menu-bar icon to open the panel. There is no Dock icon or automatic main window.
 4. Normal first launch has an empty list. Choose **Getting started** (`使用引导`) or **Add server** (`添加服务器`).
@@ -41,8 +42,8 @@ see [installation validation limits](VALIDATION.md#clean-configuration-versus-a-
   Load encrypted keys into the agent from a terminal before using the app's noninteractive connections.
 
 Owned SSH connections use `-F /dev/null` instead of inheriting `~/.ssh/config`.
-Enter an actual IPv4 address or resolvable hostname when adding a server manually; the current source also offers
-the limited SSH configuration sync described below. Jump hosts/`ProxyJump`, interactive passwords,
+Enter an actual IPv4 address or resolvable hostname when adding a server manually, or use the SSH scan or automatic
+sync described below. Jump hosts/`ProxyJump`, interactive passwords,
 IPv6 SSH addresses, and in-app initial host trust remain unsupported.
 The minimum deployment target is not a claim that every OS version or architecture has been tested.
 
@@ -81,21 +82,21 @@ Stop a profile's connection and checks before editing or deleting it. Deletion a
 Other connections are preserved; deleting the last entry restores the empty list. Tabs scroll horizontally for larger lists.
 Closing the panel leaves tunnels running; quitting the app stops connections it created. Width and font size are adjustable in Settings.
 
-### SSH configuration sync (current source)
+### Automatic SSH sync and one-time scanning
 
 In Settings, **Scan and update once** (`扫描并更新一次`) reads `~/.ssh/config` even when automatic sync is off.
-The **SSH configuration sync** switch (`SSH 配置同步`) is off by default. Turning it on checks at app startup
-and periodically while running. Both modes read common concrete and wildcard `Host`
-configuration and saves a concrete alias's `HostName`, `User`, `Port`, and `IdentityFile` as local server parameters.
-It does not run `ssh -G`, `Match exec`, or jump-host commands, edit SSH configuration, or read private-key contents.
-These options are not included in the preview download above.
+The **SSH configuration sync** switch (`SSH 配置同步`) is off by default. When enabled, CATunnel checks at app startup
+and periodically while it runs. A one-time scan leaves the automatic sync and visibility settings as configured.
+Menu-bar visibility is a separate setting. Both modes read common concrete and wildcard `Host`
+configuration and save a concrete alias's `HostName`, `User`, `Port`, and `IdentityFile` as local server parameters.
+Neither mode runs `ssh -G`, `Match exec`, or jump-host commands, edits SSH configuration, or reads private-key contents.
 `Include` and `Match` are not supported: either stops that sync while preserving existing profiles.
 Aliases requiring jump hosts, proxy commands, or multiple `IdentityFile` values are skipped; sync status explains the limits.
 
 A new alias creates a visible profile without starting a connection. An existing profile is associated only when
 its resolved host, user, and SSH port uniquely match; its ID, custom name, forwarding ports, and startup preference
 are preserved. Later syncs follow the alias rather than guessing from the display name.
-While sync is enabled, the source manages linked SSH fields; turn sync off to edit them manually.
+While automatic sync is enabled, the source manages linked SSH fields; turn it off to edit them manually.
 
 Sync skips connection updates while a tunnel or check is running. When syncing manually, scan again after stopping the connection and checks.
 A change to the host, user, or SSH port disables fixed entry and clears its Python, helper, and runtime paths.
@@ -103,7 +104,7 @@ Check and install fixed entry again on the new target; sync itself performs no r
 A missing alias, unreadable configuration, or unsupported entry leaves the last saved profile intact.
 Deleting a linked profile remembers that alias as skipped; Settings provides **Restore skipped aliases** (`恢复已跳过的别名`).
 
-### Choose servers shown in the menu-bar panel (current source)
+### Choose servers shown in the menu-bar panel
 
 Settings provides a visibility choice for each server, with all visible by default. A hidden server remains manageable
 from **Connection settings and logs** (`连接设置与日志…`). Its active tunnel, reconnection, and startup connection
@@ -111,7 +112,7 @@ preferences remain independent. All profiles may be hidden and later restored fr
 
 ## Experimental fixed entry (off by default)
 
-The current source adds **Fixed entry mode** (`固定入口模式（实验性）`) below the port fields in the server editor.
+The server editor provides **Fixed entry mode** (`固定入口模式（实验性）`) below the port fields.
 New and older profiles default to off and continue using the existing direct SSH forwarding path.
 Stop that profile before editing its connection settings. Saving does not connect or install a remote service.
 
@@ -213,15 +214,15 @@ CATunnel does not edit `.codex`, `.claude`, or shell files. Network transport an
 
 ## Login startup, automatic connections, and reconnection
 
-The panel's **Settings** (`设置`) page provides login and startup-connection controls, plus SSH sync and menu-bar
-visibility in the current source. Reconnection is configured in the server editor:
+The panel's **Settings** (`设置`) page provides login and startup-connection controls, automatic SSH sync, one-time
+scanning, and menu-bar visibility. Reconnection is configured in the server editor:
 
 | Setting | Behavior |
 | --- | --- |
 | Launch at login (`登录时启动`) | Opens CATunnel after Mac login; does not decide which servers to connect |
 | Connect on app startup (`启动后自动连接`) | Per-server choice for the next app launch; off for new and older profiles by default |
 | Reconnect after interruption (`意外断开后自动重连`) | Restores an already requested connection; manually stopped servers stay stopped |
-| Keep retrying an occupied port (`端口占用时持续重试`) | New in current source and off by default; requires automatic reconnection and a previously established connection |
+| Keep retrying an occupied port (`端口占用时持续重试`) | Off by default; requires automatic reconnection and a previously established connection |
 
 Changing startup connection preferences does not interrupt or rebuild an active tunnel. The server editor also exposes this option.
 Login startup uses macOS login-item services. Settings reports pending approval and links to system settings when needed.
@@ -229,10 +230,8 @@ Keep the app in a stable location, normally Applications, before enabling it.
 
 A recognized older CATunnel login item is inspected read-only. Only explicitly changing the switch backs up and handles that item;
 unrecognized contents are preserved with an error. Opening Settings alone does not migrate login items.
-Login and startup-connection switches are included in preview packages starting with `v0.6.0-preview.2` (build 5).
 Offline demo switches affect simulated state only, without login registration, normal settings changes, or server connections.
 
-The current source adds sleep handling and continuous recovery; these changes are not included in that download.
 On a system sleep notification, CATunnel closes its owned SSH processes. Wake resumes only servers that were still requested
 and had automatic reconnection enabled before sleep. Manually stopped servers, exhausted retries, and servers with automatic
 reconnection disabled remain stopped. Connection requests made during sleep wait for wake only when automatic reconnection is enabled;
@@ -264,8 +263,7 @@ Third-party check failures do not stop established tunnels. Scores are **for ref
 Responses based on a containing network are labeled as cached network assessments, not exact-IP real-time measurements.
 Claude's network check does not validate browser challenges on the Claude website. Third-party endpoints may change.
 
-The current source replaces the **Ping0** check with a browser button, not included in the `v0.6.0-preview.2` download.
-Only clicking it opens the default browser. A public exit IP from a successful check opens `https://ping0.cc/ip/{ip}`;
+The **Ping0** button opens the default browser only when clicked. A public exit IP from a successful check opens `https://ping0.cc/ip/{ip}`;
 historical results are labeled as the last observed exit IP. Without a usable IP, it opens `https://ping0.cc/`.
 Read IP type, risk, and shared-user information on the website. The app no longer queries, parses, or caches Ping0 results
 and has no option to enable its former check. The browser uses the Mac's network settings rather than sending a lookup
@@ -286,7 +284,7 @@ The legacy array format remains readable and is upgraded only on an explicit sav
 Duplicate IDs and conflicting server/port entries are rejected. Missing `identityFile` uses default keys/agent;
 missing `assessIPRisk`, `autoConnectOnLaunch`, or `keepRetryingForwardingFailure` defaults to false. `autoReconnect` is stored separately.
 The legacy `assessPing0` field remains readable and preserved but no longer triggers a check; no manual migration is needed.
-The current source uses optional `sshConfigAlias` links and the top-level `excludedSSHConfigAliases` array for deleted, skipped aliases;
+Optional `sshConfigAlias` links and the top-level `excludedSSHConfigAliases` array track source aliases and deleted, skipped aliases;
 the document version stays `1`. In UI preferences, missing `sshConfigSyncEnabled` defaults to false and `hiddenPanelIDs` to an empty list,
 so all older profiles remain visible in the menu-bar panel.
 
