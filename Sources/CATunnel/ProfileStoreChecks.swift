@@ -348,6 +348,77 @@ enum ProfileStoreChecks {
         let malformedPreferences = makeStore(fixtureDirectory)
         checks["malformedAppearanceFieldPreservesOtherPreferences"] = malformedPreferences.selectedID == profile(2).id
             && malformedPreferences.panelAppearance == PanelAppearance(width: 320, fontScale: 1.1)
+
+        let visibilityDirectory = temporaryDirectory.appendingPathComponent("panel-visibility-preferences")
+        var visibilityProfiles = fixtureProfiles
+        visibilityProfiles[0].autoConnectOnLaunch = true
+        let visibilityProfileData = try writeProfiles(visibilityProfiles, to: visibilityDirectory)
+        let visibilityPreferencesURL = visibilityDirectory.appendingPathComponent("ui-preferences.json")
+        let oldVisibilityPreferences = try JSONSerialization.data(withJSONObject: [
+            "selectedID": profile(2).id, "panelAppearance": ["width": 360, "fontScale": 1.1]
+        ])
+        try oldVisibilityPreferences.write(to: visibilityPreferencesURL)
+        let visibility = makeStore(visibilityDirectory)
+        checks["olderPreferencesShowAllServersWithoutRewriting"] = visibility.panelProfiles == visibilityProfiles
+            && visibility.panelSelectedProfile == visibilityProfiles[1]
+            && visibilityProfiles.allSatisfy { visibility.isVisibleInPanel($0.id) }
+            && (try? Data(contentsOf: visibilityPreferencesURL)) == oldVisibilityPreferences
+        visibility.controller?.onEvent?(.status(id: profile(2).id, status: activeStatus))
+        let visibilityStates = visibility.statuses
+        let visibilityLogIDs = visibility.logs.mapValues { $0.map(\.id) }
+        visibility.setVisibleInPanel(false, for: profile(2).id)
+        checks["hidingSelectedServerFallsBackOnlyInPanel"] = visibility.panelProfiles
+            == [visibilityProfiles[0], visibilityProfiles[2]]
+            && visibility.panelSelectedProfile == visibilityProfiles[0]
+            && visibility.panelSelectedID == profile(1).id
+            && visibility.selectedProfile == visibilityProfiles[1]
+            && visibility.profiles == visibilityProfiles
+        visibility.selectedID = profile(3).id
+        visibility.selectedID = profile(2).id
+        checks["dashboardSelectionCannotRevealHiddenPanelServer"] = visibility.selectedProfile == visibilityProfiles[1]
+            && visibility.panelSelectedProfile == visibilityProfiles[0]
+            && !visibility.panelProfiles.contains { $0.id == profile(2).id }
+        visibility.selectPanelProfile(profile(3).id)
+        visibility.selectPanelProfile(profile(2).id)
+        checks["panelSelectionAcceptsOnlyVisibleServers"] = visibility.panelSelectedID == profile(3).id
+            && visibility.selectedID == profile(3).id
+        visibility.setVisibleInPanel(false, for: profile(1).id)
+        visibility.setVisibleInPanel(false, for: profile(3).id)
+        checks["allServersCanBeHiddenWithoutChangingConnectionsOrStartup"] = visibility.panelProfiles.isEmpty
+            && visibility.panelSelectedID.isEmpty && visibility.panelSelectedProfile == nil
+            && visibility.selectedProfile == visibilityProfiles[2] && visibility.profiles == visibilityProfiles
+            && visibility.statuses == visibilityStates && visibility.logs.mapValues { $0.map(\.id) } == visibilityLogIDs
+            && visibility.profiles[0].autoConnectOnLaunch
+            && (try? Data(contentsOf: visibilityDirectory.appendingPathComponent("profiles.json"))) == visibilityProfileData
+        let hiddenPreferencesBeforeReload = try Data(contentsOf: visibilityPreferencesURL)
+        let visibilityReloaded = makeStore(visibilityDirectory)
+        checks["allHiddenPreferencesRestoreWithoutConnectingOrRewriting"] = visibilityReloaded.panelProfiles.isEmpty
+            && visibilityReloaded.panelSelectedProfile == nil && visibilityReloaded.profiles == visibilityProfiles
+            && visibilityReloaded.statuses.values.allSatisfy { $0.phase == .stopped }
+            && (try? Data(contentsOf: visibilityPreferencesURL)) == hiddenPreferencesBeforeReload
+        visibilityReloaded.setVisibleInPanel(true, for: profile(2).id)
+        visibilityReloaded.selectPanelProfile(profile(2).id)
+        checks["hiddenServerCanBeShownAndSelectedAgain"] = visibilityReloaded.panelProfiles == [visibilityProfiles[1]]
+            && visibilityReloaded.panelSelectedProfile == visibilityProfiles[1]
+            && visibilityReloaded.selectedID == profile(2).id
+            && !visibilityReloaded.isVisibleInPanel(profile(1).id)
+            && !visibilityReloaded.isVisibleInPanel(profile(3).id)
+        visibilityReloaded.resetPanelAppearance()
+        let visibilityAfterAppearanceReset = makeStore(visibilityDirectory)
+        checks["appearanceResetKeepsPanelVisibilityAndSelection"] = visibilityAfterAppearanceReset.panelAppearance == .default
+            && visibilityAfterAppearanceReset.panelProfiles == [visibilityProfiles[1]]
+            && visibilityAfterAppearanceReset.panelSelectedID == profile(2).id
+        try visibilityAfterAppearanceReset.remove(profile(1).id)
+        let deletedVisibilityObject = try JSONSerialization.jsonObject(with: Data(contentsOf: visibilityPreferencesURL))
+            as? [String: Any]
+        let hiddenIDsAfterDeletion = deletedVisibilityObject?["hiddenPanelIDs"] as? [String]
+        let visibilityAfterDeletion = makeStore(visibilityDirectory)
+        try visibilityAfterDeletion.add(visibilityProfiles[0])
+        checks["deletingHiddenServerRemovesPersistedVisibilityPreference"] = hiddenIDsAfterDeletion == [profile(3).id]
+            && visibilityAfterDeletion.isVisibleInPanel(profile(1).id)
+            && visibilityAfterDeletion.panelProfiles.map(\.id) == [profile(2).id, profile(1).id]
+            && visibilityAfterDeletion.panelSelectedID == profile(1).id
+
         let nonPersistent = makeStore(fixtureDirectory, persist: false)
         try nonPersistent.add(profile(4))
         checks["nonpersistentStoreDoesNotReadOrWriteSavedProfiles"] = nonPersistent.profiles == [profile(4)]

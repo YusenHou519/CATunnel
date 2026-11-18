@@ -71,7 +71,7 @@ struct GettingStartedView: View {
                     Divider()
                     Label("本应用不保存密码或私钥内容，不自动接受 SSH 主机指纹，也不修改 SSH、Cursor 或服务器程序配置。", systemImage: "lock.shield")
                         .foregroundStyle(.secondary)
-                    Text("目前使用明确的主机、端口与密钥设置，暂不读取 ~/.ssh/config 中的 Host 别名或 ProxyJump。需跳板机的连接暂不支持。")
+                    Text("可在设置中同步 ~/.ssh/config 中的服务器连接信息。需要跳板机的连接暂不支持。")
                         .foregroundStyle(.secondary)
                 }
                 .font(.system(size: 12))

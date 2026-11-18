@@ -26,6 +26,8 @@ This is an illustration; it does not send real network requests.
 ## Features
 
 - **Multiple servers:** add, edit, remove, and switch profiles from the top tabs.
+- **SSH configuration sync (current source):** optional read-only sync of server parameters from `~/.ssh/config`; new profiles do not connect automatically, and active profiles update after stopping.
+- **Menu-bar visibility (current source):** choose which servers appear in the panel, with all visible by default; hiding does not change tunnels, startup connections, or access from connection details.
 - **Tunnel controls:** independent connection states, reconnection after interruptions, and per-server startup preferences.
 - **Recovery options (current source):** close owned SSH processes before sleep and resume eligible connections on wake; optional forwarding retries every 60 seconds, off by default.
 - **Fixed entry (current source, experimental):** an optional remote relay keeps the entry port open, with in-app installation, discovery and selection of existing Python interpreters, and an explicit read-only status check.
@@ -75,7 +77,8 @@ The default example ports are `7890` on the Mac and `17892` on the server; both 
 First launch starts with an empty server list. See the [user guide](docs/USAGE.en.md)
 for configuration, verification commands, and troubleshooting.
 
-SSH aliases, ProxyJump, interactive passwords, and IPv6 host addresses are not yet supported.
+The current source supports a limited SSH alias sync option in Settings. Owned SSH connections still use explicit parameters instead of inheriting SSH configuration.
+ProxyJump, interactive passwords, and IPv6 host addresses remain unsupported. Sync and menu-bar visibility are not included in the preview download above.
 API reachability does not prove account or model access. IP scores are optional, off by default, and for reference only.
 The Ping0 button is in the current source, not the preview download above. Clicking it opens the observed exit IP's page
 in the default browser; historical IPs are labeled, and the homepage opens when no usable IP is available.
@@ -124,7 +127,7 @@ See the [user guide](docs/USAGE.en.md) for detailed configuration, manual deploy
 ## TODO
 
 - [ ] English UI.
-- [ ] SSH aliases and jump hosts.
+- [ ] Broader SSH configuration semantics and jump hosts.
 - [ ] Profile import, export, and migration design.
 - [ ] Homebrew installation and update experience.
 

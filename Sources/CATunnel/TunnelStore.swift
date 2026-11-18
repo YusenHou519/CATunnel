@@ -12,6 +12,7 @@ struct TunnelLogEntry: Identifiable {
 
 enum StoreError: LocalizedError {
     case activeConnection, unknownServer, configurationUnavailable, mismatchedOriginalProfile
+    case sshConfigManaged, staleEditor
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum StoreError: LocalizedError {
         case .unknownServer: return "找不到这台服务器。"
         case .configurationUnavailable: return "服务器配置无法读取。为保护原文件，修改已禁用；请修复配置文件后重新启动 CATunnel。"
         case .mismatchedOriginalProfile: return "服务器编辑信息不匹配，请关闭编辑窗口后重试。"
+        case .sshConfigManaged: return "SSH 连接信息由配置文件同步。请在 SSH 配置中修改。"
+        case .staleEditor: return "服务器配置已更新。请关闭编辑窗口，重新打开后再修改。"
         }
     }
 }
@@ -30,6 +33,11 @@ final class TunnelStore: ObservableObject {
     @Published var statuses: [String: TunnelStatus] = [:]
     @Published var logs: [String: [TunnelLogEntry]] = [:]
     @Published private(set) var panelAppearance: PanelAppearance = .default
+    @Published private(set) var hiddenPanelIDs: Set<String> = []
+    @Published private(set) var sshConfigSyncEnabled = false
+    @Published private(set) var sshConfigRefreshing = false
+    @Published private(set) var sshConfigMessage: String?
+    @Published private(set) var excludedSSHConfigAliases: Set<String> = []
     @Published var showingAppearanceSettings = false
     @Published var selectedID: String {
         didSet {
@@ -47,6 +55,8 @@ final class TunnelStore: ObservableObject {
     private let persistSettings: Bool
     private let settingsURL: URL
     private let preferencesURL: URL
+    private let sshConfigURL: URL?
+    private var sshConfigMonitor: Task<Void, Never>?
     private var completedChecks: [String: CompletedCheck] = [:]
     private var demoTasks: [String: Task<Void, Never>] = [:]
     private var demoGenerations: [String: UUID] = [:]
@@ -56,18 +66,24 @@ final class TunnelStore: ObservableObject {
     private struct Preferences: Codable {
         var selectedID: String
         var panelAppearance: PanelAppearance
+        var hiddenPanelIDs: [String]
+        var sshConfigSyncEnabled: Bool
 
-        private enum CodingKeys: String, CodingKey { case selectedID, panelAppearance }
+        private enum CodingKeys: String, CodingKey { case selectedID, panelAppearance, hiddenPanelIDs, sshConfigSyncEnabled }
 
-        init(selectedID: String, panelAppearance: PanelAppearance) {
+        init(selectedID: String, panelAppearance: PanelAppearance, hiddenPanelIDs: Set<String>, sshConfigSyncEnabled: Bool) {
             self.selectedID = selectedID
             self.panelAppearance = panelAppearance.normalized
+            self.hiddenPanelIDs = hiddenPanelIDs.sorted()
+            self.sshConfigSyncEnabled = sshConfigSyncEnabled
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             selectedID = (try? container.decode(String.self, forKey: .selectedID)) ?? ""
             panelAppearance = (try? container.decode(PanelAppearance.self, forKey: .panelAppearance)) ?? .default
+            hiddenPanelIDs = (try? container.decode([String].self, forKey: .hiddenPanelIDs)) ?? []
+            sshConfigSyncEnabled = (try? container.decode(Bool.self, forKey: .sshConfigSyncEnabled)) ?? false
         }
     }
 
@@ -77,27 +93,40 @@ final class TunnelStore: ObservableObject {
     }
 
     var selectedProfile: ServerProfile? { profiles.first { $0.id == selectedID } }
+    var panelProfiles: [ServerProfile] { profiles.filter { isVisibleInPanel($0.id) } }
+    var panelSelectedProfile: ServerProfile? {
+        if let selectedProfile, isVisibleInPanel(selectedProfile.id) { return selectedProfile }
+        return panelProfiles.first
+    }
+    var panelSelectedID: String { panelSelectedProfile?.id ?? "" }
+    var canSyncSSHConfig: Bool { sshConfigURL != nil && configurationError == nil }
 
     init(persistSettings: Bool = true, controller: TunnelController? = nil,
          demoMode: Bool = false, settingsDirectory: URL? = nil,
-         loginItem: LoginItemManager? = nil) {
+         loginItem: LoginItemManager? = nil, sshConfigURL: URL? = nil) {
         self.persistSettings = persistSettings && !demoMode
         self.controller = demoMode ? nil : (controller ?? TunnelController())
         self.demoMode = demoMode
         self.loginItem = loginItem ?? LoginItemManager(offline: demoMode || !persistSettings || settingsDirectory != nil)
         let directory = settingsDirectory ?? AppIdentity.settingsDirectory()
+        self.sshConfigURL = self.persistSettings ? sshConfigURL ?? (settingsDirectory == nil
+            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config") : nil) : nil
         settingsURL = directory.appendingPathComponent("profiles.json")
         preferencesURL = directory.appendingPathComponent("ui-preferences.json")
         var loaded = demoMode ? ServerProfile.examples : []
+        var excluded: [String] = []
         var configurationLoadError: String?
         if self.persistSettings && FileManager.default.fileExists(atPath: settingsURL.path) {
             do {
-                loaded = try ServerConfiguration.decode(Data(contentsOf: settingsURL)).profiles
+                let configuration = try ServerConfiguration.decode(Data(contentsOf: settingsURL))
+                loaded = configuration.profiles
+                excluded = configuration.excludedSSHConfigAliases ?? []
             } catch {
                 configurationLoadError = "无法读取服务器配置：\(error.localizedDescription)\n原文件已保留，新增、编辑和删除已禁用。请修复 \(settingsURL.path) 后重新启动 CATunnel。"
             }
         }
         profiles = loaded
+        excludedSSHConfigAliases = Set(excluded.map { $0.lowercased() })
         selectedID = loaded.first?.id ?? ""
         configurationError = configurationLoadError
         var preferenceError: String?
@@ -108,6 +137,8 @@ final class TunnelStore: ObservableObject {
                     selectedID = preferences.selectedID
                 }
                 panelAppearance = preferences.panelAppearance
+                hiddenPanelIDs = Set(preferences.hiddenPanelIDs).intersection(loaded.map(\.id))
+                sshConfigSyncEnabled = preferences.sshConfigSyncEnabled
             } catch {
                 preferenceError = "未能读取界面偏好，已使用默认页签与外观。"
             }
@@ -131,6 +162,20 @@ final class TunnelStore: ObservableObject {
     }
 
     func status(for id: String) -> TunnelStatus { statuses[id] ?? .stopped }
+
+    func isVisibleInPanel(_ id: String) -> Bool { !hiddenPanelIDs.contains(id) }
+
+    func selectPanelProfile(_ id: String) {
+        guard panelProfiles.contains(where: { $0.id == id }) else { return }
+        selectedID = id
+    }
+
+    func setVisibleInPanel(_ visible: Bool, for id: String) {
+        guard profiles.contains(where: { $0.id == id }), isVisibleInPanel(id) != visible else { return }
+        if visible { hiddenPanelIDs.remove(id) }
+        else { hiddenPanelIDs.insert(id) }
+        savePreferences()
+    }
 
     func presentationStatus(for id: String) -> TunnelStatus {
         var current = status(for: id)
@@ -185,6 +230,17 @@ final class TunnelStore: ObservableObject {
         return [.stopped, .failed].contains(current.phase) && current.proxyCheck != .checking
     }
 
+    func isCurrentEditorProfile(_ original: ServerProfile) -> Bool {
+        guard var current = profiles.first(where: { $0.id == original.id }) else { return false }
+        current.autoConnectOnLaunch = original.autoConnectOnLaunch
+        return current == original
+    }
+
+    private func sameSSHFields(_ left: ServerProfile, _ right: ServerProfile) -> Bool {
+        left.host == right.host && left.user == right.user && left.sshPort == right.sshPort
+            && left.identityFile == right.identityFile
+    }
+
     func add(_ profile: ServerProfile) throws {
         let updated = profiles + [profile]
         try persistProfiles(updated)
@@ -201,7 +257,13 @@ final class TunnelStore: ObservableObject {
         guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { throw StoreError.unknownServer }
         guard canModify(profile.id) else { throw StoreError.activeConnection }
         if let original, original.id != profile.id { throw StoreError.mismatchedOriginalProfile }
+        let current = profiles[index]
+        if let original, !isCurrentEditorProfile(original) { throw StoreError.staleEditor }
+        if sshConfigSyncEnabled, current.sshConfigAlias != nil, !sameSSHFields(current, profile) {
+            throw StoreError.sshConfigManaged
+        }
         var edited = profile
+        edited.sshConfigAlias = current.sshConfigAlias
         if let original, !autoConnectOnLaunchEdited,
            profile.autoConnectOnLaunch == original.autoConnectOnLaunch {
             // The settings panel can change this preference while the editor is open.
@@ -233,15 +295,21 @@ final class TunnelStore: ObservableObject {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { throw StoreError.unknownServer }
         guard canModify(id) else { throw StoreError.activeConnection }
         var updated = profiles
-        updated.remove(at: index)
-        try persistProfiles(updated)
+        let removed = updated.remove(at: index)
+        var excluded = excludedSSHConfigAliases
+        if let alias = removed.sshConfigAlias { excluded.insert(alias.lowercased()) }
+        try persistProfiles(updated, excludedAliases: excluded)
         profiles = updated
+        excludedSSHConfigAliases = excluded
         cancelDemoTask(id)
         statuses.removeValue(forKey: id)
         logs.removeValue(forKey: id)
         completedChecks.removeValue(forKey: id)
+        let wasHidden = hiddenPanelIDs.remove(id) != nil
         if selectedID == id {
             selectedID = updated.isEmpty ? "" : updated[min(index, updated.count - 1)].id
+        } else if wasHidden {
+            savePreferences()
         }
     }
 
@@ -249,9 +317,10 @@ final class TunnelStore: ObservableObject {
         guard configurationError == nil else { throw StoreError.configurationUnavailable }
     }
 
-    private func persistProfiles(_ updated: [ServerProfile]) throws {
+    private func persistProfiles(_ updated: [ServerProfile], excludedAliases: Set<String>? = nil) throws {
         try ensureConfigurationAvailable()
-        let data = try ServerConfiguration(profiles: updated).encoded()
+        let aliases = excludedAliases ?? excludedSSHConfigAliases
+        let data = try ServerConfiguration(profiles: updated, excludedSSHConfigAliases: Array(aliases)).encoded()
         guard persistSettings else { return }
         let folder = settingsURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
@@ -290,8 +359,200 @@ final class TunnelStore: ObservableObject {
         NSPasteboard.general.setString("http://127.0.0.1:\(profile.remotePort)", forType: .string)
     }
 
+    func setSSHConfigSyncEnabled(_ enabled: Bool) {
+        guard canSyncSSHConfig, enabled != sshConfigSyncEnabled else { return }
+        sshConfigSyncEnabled = enabled
+        savePreferences()
+        if enabled {
+            startSSHConfigMonitoring(immediately: true)
+        } else {
+            sshConfigMonitor?.cancel()
+            sshConfigMonitor = nil
+            sshConfigMessage = nil
+        }
+    }
+
+    func startSSHConfigMonitoring(immediately: Bool = false) {
+        guard canSyncSSHConfig, sshConfigSyncEnabled, sshConfigMonitor == nil, !isShuttingDown else { return }
+        sshConfigMonitor = Task { [weak self] in
+            if immediately { await self?.refreshSSHConfig() }
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+                catch { return }
+                guard let self else { return }
+                await self.refreshSSHConfig()
+            }
+        }
+    }
+
+    func refreshSSHConfig() async {
+        await performSSHConfigRefresh(manual: false)
+    }
+
+    func syncSSHConfigNow() async {
+        await performSSHConfigRefresh(manual: true)
+    }
+
+    private func performSSHConfigRefresh(manual: Bool) async {
+        guard let sshConfigURL, canSyncSSHConfig, manual || sshConfigSyncEnabled,
+              !isShuttingDown, !sshConfigRefreshing else { return }
+        sshConfigRefreshing = true
+        defer { sshConfigRefreshing = false }
+        let result = await Task.detached(priority: .utility) { SSHConfigImport.load(from: sshConfigURL) }.value
+        guard !Task.isCancelled, !isShuttingDown, manual || sshConfigSyncEnabled else { return }
+        guard result.availability == .available else {
+            sshConfigMessage = result.message ?? "未能读取 SSH 配置，已保留现有服务器。"
+            return
+        }
+        do {
+            try applySSHConfig(result)
+        } catch {
+            sshConfigMessage = "未能保存同步结果，已保留现有服务器。"
+        }
+    }
+
+    func restoreExcludedSSHConfigAliases() async {
+        guard canSyncSSHConfig, !excludedSSHConfigAliases.isEmpty else { return }
+        do {
+            try persistProfiles(profiles, excludedAliases: [])
+            excludedSSHConfigAliases = []
+            await refreshSSHConfig()
+        } catch {
+            sshConfigMessage = "无法恢复已跳过的别名。"
+        }
+    }
+
+    private func applySSHConfig(_ result: SSHConfigImportResult) throws {
+        var updated = profiles
+        var resetByIndex: [Int: Bool] = [:]
+        var newProfiles: [ServerProfile] = []
+        var deferred = 0
+        var conflicting = 0
+        let knownAliases = Set(result.entries.map { $0.alias.lowercased() })
+        let noSource = profiles.filter { profile in
+            profile.sshConfigAlias.map { !knownAliases.contains($0.lowercased()) } ?? false
+        }.count
+
+        for entry in result.entries {
+            let alias = entry.alias.lowercased()
+            guard !excludedSSHConfigAliases.contains(alias) else { continue }
+            let linked = profiles.firstIndex { $0.sshConfigAlias?.lowercased() == alias }
+            let matching = profiles.indices.filter { index in
+                let profile = profiles[index]
+                return profile.sshConfigAlias == nil && profile.host.lowercased() == entry.host.lowercased()
+                    && profile.user == entry.user && profile.sshPort == entry.sshPort
+            }
+            if linked == nil, matching.count > 1 {
+                conflicting += 1
+                continue
+            }
+            let index = linked ?? matching.first.flatMap { resetByIndex[$0] == nil ? $0 : nil }
+            var candidate = index.map { profiles[$0] } ?? .draft()
+            let old = candidate
+            if index == nil { candidate.name = entry.alias }
+            candidate.sshConfigAlias = entry.alias
+            candidate.host = entry.host
+            candidate.user = entry.user
+            candidate.sshPort = entry.sshPort
+            candidate.identityFile = entry.identityFile
+            let newTarget = old.host.lowercased() != candidate.host.lowercased()
+                || old.user != candidate.user || old.sshPort != candidate.sshPort
+            let resetFixedEntry = index != nil && newTarget && (candidate.useFixedEntry
+                || candidate.fixedEntryHelperPath != nil || candidate.fixedEntryRuntimePath != nil
+                || candidate.fixedEntryPythonPath != nil)
+            if resetFixedEntry {
+                candidate.useFixedEntry = false
+                candidate.fixedEntryHelperPath = nil
+                candidate.fixedEntryRuntimePath = nil
+                candidate.fixedEntryPythonPath = nil
+            }
+            guard candidate != old else { continue }
+            if let index, !canModify(old.id), !sameSSHFields(old, candidate) {
+                deferred += 1
+                if old.sshConfigAlias == nil {
+                    // Record the association without changing the running session's parameters.
+                    updated[index].sshConfigAlias = entry.alias
+                    resetByIndex[index] = false
+                }
+                continue
+            }
+            guard (try? candidate.validateForConnection()) != nil else {
+                conflicting += 1
+                continue
+            }
+            if let index {
+                updated[index] = candidate
+                resetByIndex[index] = resetFixedEntry
+            } else {
+                newProfiles.append(candidate)
+            }
+        }
+
+        func endpoint(_ profile: ServerProfile) -> String {
+            "\(profile.host.lowercased()):\(profile.sshPort):\(profile.remotePort)"
+        }
+        // Validate the final endpoints together so two profiles can swap destinations.
+        // Restoring a rejected move can block another move into its former endpoint.
+        while true {
+            let groups = Dictionary(grouping: updated.indices) { endpoint(updated[$0]) }
+            let rejected = groups.values.filter { $0.count > 1 }.flatMap { group in
+                group.filter { endpoint(profiles[$0]) != endpoint(updated[$0]) }
+            }
+            guard !rejected.isEmpty else { break }
+            conflicting += rejected.count
+            for index in rejected {
+                updated[index] = profiles[index]
+                resetByIndex.removeValue(forKey: index)
+            }
+        }
+        var endpoints = Set(updated.map(endpoint))
+        var added: [String] = []
+        for profile in newProfiles {
+            if endpoints.insert(endpoint(profile)).inserted {
+                updated.append(profile)
+                added.append(profile.id)
+            } else {
+                conflicting += 1
+            }
+        }
+        if updated != profiles {
+            try persistProfiles(updated)
+            let previousProfiles = profiles
+            profiles = updated
+            for id in added {
+                statuses[id] = .stopped
+                logs[id] = []
+                appendLog(id, "已从 SSH 配置添加服务器。")
+            }
+            for (index, resetFixedEntry) in resetByIndex {
+                let id = updated[index].id
+                if !sameSSHFields(previousProfiles[index], updated[index]) {
+                    completedChecks.removeValue(forKey: id)
+                    statuses[id] = .stopped
+                }
+                appendLog(id, resetFixedEntry
+                    ? "SSH 目标已更新。请在新目标上重新安装固定入口。"
+                    : "已从 SSH 配置同步连接设置。")
+            }
+            if selectedID.isEmpty, let first = updated.first { selectedID = first.id }
+        }
+        let linkedCount = updated.filter { $0.sshConfigAlias != nil }.count
+        var summary = ["已关联 \(linkedCount) 台服务器"]
+        if deferred > 0 {
+            summary.append(sshConfigSyncEnabled
+                ? "\(deferred) 台停止后自动更新"
+                : "\(deferred) 台活动中，请停止后再次扫描")
+        }
+        if noSource > 0 { summary.append("\(noSource) 台保留上次配置") }
+        if conflicting > 0 { summary.append("\(conflicting) 个条目冲突") }
+        if !result.skippedAliases.isEmpty { summary.append("\(result.skippedAliases.count) 个别名不受支持") }
+        let message = summary.joined(separator: " · ")
+        if sshConfigMessage != message { sshConfigMessage = message }
+    }
+
     func shutdown() async {
         isShuttingDown = true
+        sshConfigMonitor?.cancel()
         if demoMode {
             for id in profiles.map(\.id) { stop(id) }
             return
@@ -320,7 +581,8 @@ final class TunnelStore: ObservableObject {
             let folder = preferencesURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                                                    attributes: [.posixPermissions: 0o700])
-            let data = try JSONEncoder().encode(Preferences(selectedID: selectedID, panelAppearance: panelAppearance))
+            let data = try JSONEncoder().encode(Preferences(selectedID: selectedID, panelAppearance: panelAppearance,
+                hiddenPanelIDs: hiddenPanelIDs, sshConfigSyncEnabled: sshConfigSyncEnabled))
             try data.write(to: preferencesURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
         } catch {

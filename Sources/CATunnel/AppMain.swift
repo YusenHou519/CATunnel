@@ -167,7 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 showPopover()
             }
         } else {
-            for id in options.startupConnectionIDs(profiles: store.profiles) { store.start(id) }
+            Task {
+                await store.refreshSSHConfig()
+                store.startSSHConfigMonitoring()
+                for id in options.startupConnectionIDs(profiles: store.profiles) { store.start(id) }
+            }
         }
     }
 
@@ -425,7 +429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startupSettings.showingAppearanceSettings = true
         for (label, width, scale) in [("narrow-large", 300.0, 1.2), ("wide-small", 440.0, 0.9)] {
             startupSettings.updatePanelAppearance(width: width, fontScale: scale)
-            let toggleIDs = ["settings-login-toggle"] + startupSettings.profiles.map { "settings-auto-connect-\($0.id)" }
+            let toggleIDs = ["settings-login-toggle", "settings-ssh-config-refresh"]
+                + startupSettings.profiles.map { "settings-auto-connect-\($0.id)" }
             let frames = try await captureFixture(panel(startupSettings), size: NSSize(width: width, height: 640),
                 to: folder.appendingPathComponent("startup-settings-\(label).png"),
                 identifiers: toggleIDs + ["settings-scroll"])
@@ -440,6 +445,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         checks["offlineStartupSwitchesDoNotAlterConnections"] = startupSettings.statuses == startupStates
             && startupSettings.loginItem.isEnabled && startupSettings.profiles[0].autoConnectOnLaunch
             && !startupSettings.profiles[1].autoConnectOnLaunch && startupSettings.controller == nil
+        startupSettings.showingAppearanceSettings = false
+        startupSettings.resetPanelAppearance()
+        for profile in startupSettings.profiles { startupSettings.setVisibleInPanel(false, for: profile.id) }
+        let hiddenFrames = try await captureFixture(panel(startupSettings), size: NSSize(width: 320, height: 640),
+            to: folder.appendingPathComponent("panel-all-servers-hidden.png"),
+            identifiers: ["panel-hidden-servers-empty", "panel-hidden-connections"])
+        checks["allHiddenPanelShowsRecoveryAndActiveConnectionNotice"] = hiddenFrames["panel-hidden-servers-empty"] != nil
+            && hiddenFrames["panel-hidden-connections"] != nil && startupSettings.statuses == startupStates
         await startupSettings.shutdown()
 
         let multiple = TunnelStore(persistSettings: false, demoMode: true)
@@ -918,6 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: temp) }
             checks.merge(try await ProfileStoreChecks.run(in: temp)) { _, result in result }
+            checks.merge(try await SSHConfigStoreChecks.run(in: temp)) { _, result in result }
             checks.merge(try await InspectionUIChecks.run()) { _, result in result }
             checks.merge(try await LoginItemChecks.run(in: temp.appendingPathComponent("login-items"))) { _, result in result }
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Sync server connection settings from concrete aliases in `~/.ssh/config`.
+  Scan once from Settings or enable automatic sync.
+- Choose which servers appear in the menu-bar panel while managing all servers
+  in the connection window.
 - Allow ten minutes without data in fixed-entry streams, and bound stopped control
   process I/O cleanup even when another process retains its output pipes.
 - Retry unconfirmed fixed-entry renewals only within the last confirmed lease;

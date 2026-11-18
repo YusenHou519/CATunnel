@@ -27,11 +27,15 @@ struct AppearanceSettingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    SSHConfigSettingsView(store: store)
+                    Divider()
                     LoginSettingsSection(loginItem: store.loginItem,
                                          fontScale: store.panelAppearance.fontScale,
                                          demoMode: store.demoMode)
                     Divider()
                     autoConnectSettings
+                    Divider()
+                    panelServerSettings
                     Divider()
                     appearanceSettings
                 }
@@ -43,6 +47,48 @@ struct AppearanceSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("appearance-settings")
+    }
+
+    private var panelServerSettings: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text("菜单栏显示")
+                .font(font(12, weight: .semibold))
+            Text("选择菜单栏面板中显示的服务器。隐藏不会停止连接，也不影响启动后自动连接；全部服务器仍可在连接设置中管理。")
+                .font(font(10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if store.profiles.isEmpty {
+                Text("添加服务器后，可在这里选择菜单栏显示的服务器。")
+                    .font(font(11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(store.profiles) { profile in
+                Toggle(isOn: Binding(
+                    get: { store.isVisibleInPanel(profile.id) },
+                    set: { store.setVisibleInPanel($0, for: profile.id) }
+                )) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(profile.name)
+                            .font(font(11, weight: .medium))
+                            .lineLimit(2)
+                        Text(profile.host)
+                            .font(font(10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .accessibilityLabel("\(profile.name) 在菜单栏显示")
+                .accessibilityIdentifier("settings-panel-visible-\(profile.id)")
+                .captureLayoutEvidence("settings-panel-visible-\(profile.id)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("settings-panel-servers")
     }
 
     private var autoConnectSettings: some View {
@@ -196,7 +242,7 @@ private struct LoginSettingsSection: View {
 
             Text(demoMode
                  ? "离线演示仅调整示例状态，不更改 Mac 登录项。"
-                 : "Mac 登录后启动 CATunnel；连接哪些服务器由下方开关决定。")
+                 : "Mac 登录后启动 CATunnel；连接哪些服务器由“启动后自动连接”决定。")
                 .font(.system(size: 10 * fontScale))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

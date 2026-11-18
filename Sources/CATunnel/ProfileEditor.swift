@@ -120,8 +120,13 @@ struct ProfileEditor: View {
         if !isNew && !store.canModify(profile.id) {
             return "请先断开隧道并等待检测结束，再修改服务器。"
         }
+        if !isNew && !store.isCurrentEditorProfile(profile) {
+            return StoreError.staleEditor.localizedDescription
+        }
         return nil
     }
+
+    private var managedSSHFields: Bool { profile.sshConfigAlias != nil && store.sshConfigSyncEnabled }
 
     private var inputs: [String] {
         [name, host, user, sshPort, remotePort, localPort, identityFile ?? "",
@@ -293,12 +298,21 @@ struct ProfileEditor: View {
                 editorField("SSH 端口", text: $sshPort, identifier: "profile-ssh-port")
                     .frame(width: 96)
             }
+            .disabled(managedSSHFields)
             editorField("SSH 用户", text: $user, placeholder: "登录服务器的用户名", identifier: "profile-user")
-            Text("填写真实主机地址；当前不读取 ~/.ssh/config 的别名或跳板设置。")
+                .disabled(managedSSHFields)
+            Text(addressHelp)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var addressHelp: String {
+        if let alias = profile.sshConfigAlias, managedSSHFields {
+            return "SSH 地址、用户、端口和密钥跟随 ~/.ssh/config 中的 \(alias)。"
+        }
+        return "手动填写真实主机地址。可在设置中同步 SSH 别名。"
     }
 
     private var identityFields: some View {
@@ -317,6 +331,7 @@ struct ProfileEditor: View {
                         .accessibilityIdentifier("profile-reset-identity")
                 }
             }
+            .disabled(managedSSHFields)
             if let identityFile {
                 Text(identityFile)
                     .font(.system(size: 11, design: .monospaced))
@@ -507,7 +522,8 @@ struct ProfileEditor: View {
                                    useFixedEntry: forInstallation ? false : useFixedEntry,
                                    fixedEntryHelperPath: Self.optionalPath(fixedEntryHelperPath, original: profile.fixedEntryHelperPath),
                                    fixedEntryRuntimePath: Self.optionalPath(fixedEntryRuntimePath, original: profile.fixedEntryRuntimePath),
-                                   fixedEntryPythonPath: Self.optionalPath(fixedEntryPythonPath, original: profile.fixedEntryPythonPath))
+                                   fixedEntryPythonPath: Self.optionalPath(fixedEntryPythonPath, original: profile.fixedEntryPythonPath),
+                                   sshConfigAlias: profile.sshConfigAlias)
         if forPythonDiscovery { return try Self.validatedPythonDiscoveryProfile(edited) }
         try edited.validate()
         return edited

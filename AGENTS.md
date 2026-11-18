@@ -38,11 +38,48 @@ Remote program → remote 127.0.0.1:17892 → SSH tunnel → Mac 127.0.0.1:7890 
 5. Connect, then run the network test when requested. Verify the remote program
    separately before describing a migration as complete.
 
-Owned SSH commands use `-F /dev/null`: they ignore `~/.ssh/config`, including its
-aliases, identity choices, forwarding rules, and jump-host settings. Enter an
-actual resolvable host and explicit connection details. Jump hosts, password
-prompts, and IPv6 host literals are not currently supported by the profile UI.
-Do not silently rewrite SSH settings to compensate.
+Owned SSH commands use `-F /dev/null`: they do not inherit `~/.ssh/config`.
+Enter a resolvable host and explicit details for manual profiles. Current source
+can separately read selected SSH fields through the opt-in sync described below;
+this does not pass the source configuration to OpenSSH. Jump hosts, password
+prompts, and IPv6 host literals remain unsupported. Do not rewrite SSH settings
+to compensate.
+
+## SSH sync and menu-bar visibility (current source)
+
+SSH configuration sync is off by default. When enabled in Settings, it reads
+`~/.ssh/config` at startup and periodically while running; an immediate sync is
+also available. Common concrete and wildcard `Host` configuration supplies
+`HostName`, `User`, `Port`, and `IdentityFile` for concrete aliases. Parsing does
+not run `ssh -G`, `Match exec`, `ProxyCommand`, or other source commands, does
+not read private-key contents, and does not write the SSH configuration.
+Offline demo, preview, and UI-check modes do not read the real SSH source.
+The supported subset includes concrete aliases, wildcard `Host` defaults, and
+first-value precedence. `Include` or `Match` stops that sync without changes;
+aliases requiring proxy/jump commands or multiple identity files are skipped.
+
+Persisted alias links identify later updates. A unique resolved
+`HostName + User + Port` match may associate an existing profile; display names
+are not used to guess ownership. Preserve profile IDs, names, forwarding ports,
+startup preferences, and unrelated fields. New aliases create visible profiles
+without auto-connecting. Apply updates only to stopped or failed profiles with
+no check running; keep active sessions and their displayed connection fields
+unchanged until stopped. A changed host, user, or SSH port clears fixed-entry
+enablement and its Python/helper/runtime paths. Sync does not install, verify,
+or stop anything on a remote host.
+
+Linked SSH fields are source-managed while sync is enabled; disabling sync
+permits manual edits. Missing aliases, unsupported entries, and parse/read
+failures preserve the last saved profiles. Deleting a linked profile persistently
+skips its alias; Settings can restore skipped aliases. Preserve prior memory and
+files if a sync write fails, and reject stale editor drafts rather than restoring
+SSH fields from before a sync.
+
+Menu-bar visibility is per profile and defaults to visible, including for older
+configurations. Hiding a server only removes it from the panel; it remains in
+connection details, retains its active tunnel, and keeps its independent
+startup/reconnection choices. All profiles may be hidden. Neither feature is
+included in the `v0.6.0-preview.2` download.
 
 ## Configuration files
 
@@ -103,6 +140,7 @@ before connecting. Preserve existing IDs; choose distinct IDs for new profiles.
 | `fixedEntryHelperPath`, `fixedEntryRuntimePath` | Optional while fixed entry is off; when on, require explicit remote absolute paths. `remotePort` remains the fixed entry and must match the helper's status before takeover. |
 | `fixedEntryPythonPath` | Optional remote Python executable absolute path. Omitted or empty uses `python3`; the same choice is used for installation, verification, and every fixed-entry control request. No local expansion of `~/`, shell activation, or automatic interpreter installation. |
 | `identityFile` | Absolute or `~/` key path; omitted/null uses OpenSSH default keys/agent. |
+| `sshConfigAlias` | Current source only: optional persistent link to a concrete SSH config alias; omitted/null leaves a manual profile. Linked SSH fields are source-managed only while sync is enabled. |
 | `assessIPRisk` | Opt-in Net.Coffee lookup of the observed public exit IP; omitted means `false`. |
 | `assessPing0` | Legacy compatibility field: read and preserve its value, but it no longer triggers a lookup. Omitted means `false`; no migration is required. |
 | `autoConnectOnLaunch` | Connect this server on normal app launch; omitted means `false`. |
@@ -111,6 +149,10 @@ All ports must be 1–65535. The first eight example fields are required; GUI de
 are not JSON decoding defaults. Duplicate IDs and `host + sshPort + remotePort`
 combinations are rejected. An empty configuration is `{"version": 1, "profiles": []}`.
 Invalid files are preserved; profile changes stay disabled until repair and restart.
+The optional top-level `excludedSSHConfigAliases` array remembers aliases skipped
+when linked profiles are deleted; omitted means none. Schema version remains 1.
+In `ui-preferences.json`, `sshConfigSyncEnabled` defaults to `false` and
+`hiddenPanelIDs` defaults to an empty list, so older profiles all remain visible.
 
 **Launch at login**, **connect on launch**, and **automatic reconnect** are separate
 controls. Login startup is managed in Settings, not in `profiles.json`.

@@ -40,9 +40,10 @@ see [installation validation limits](VALIDATION.md#clean-configuration-versus-a-
 - **Authentication:** a verified host fingerprint in `known_hosts`, plus default keys, an available SSH agent, or a selected key.
   Load encrypted keys into the agent from a terminal before using the app's noninteractive connections.
 
-CATunnel uses `-F /dev/null` and does not read `~/.ssh/config`. Enter the actual IPv4 address or resolvable hostname,
-not an alias defined only in your SSH configuration. Jump hosts/`ProxyJump`, interactive passwords,
-IPv6 SSH addresses, and in-app initial host trust are not currently supported.
+Owned SSH connections use `-F /dev/null` instead of inheriting `~/.ssh/config`.
+Enter an actual IPv4 address or resolvable hostname when adding a server manually; the current source also offers
+the limited SSH configuration sync described below. Jump hosts/`ProxyJump`, interactive passwords,
+IPv6 SSH addresses, and in-app initial host trust remain unsupported.
 The minimum deployment target is not a claim that every OS version or architecture has been tested.
 
 ## Add and manage servers
@@ -79,6 +80,34 @@ CATunnel never automatically accepts fingerprints or edits `known_hosts`. Key co
 Stop a profile's connection and checks before editing or deleting it. Deletion asks for confirmation and removes only the local entry.
 Other connections are preserved; deleting the last entry restores the empty list. Tabs scroll horizontally for larger lists.
 Closing the panel leaves tunnels running; quitting the app stops connections it created. Width and font size are adjustable in Settings.
+
+### SSH configuration sync (current source)
+
+In Settings, **Scan and update once** (`扫描并更新一次`) reads `~/.ssh/config` even when automatic sync is off.
+The **SSH configuration sync** switch (`SSH 配置同步`) is off by default. Turning it on checks at app startup
+and periodically while running. Both modes read common concrete and wildcard `Host`
+configuration and saves a concrete alias's `HostName`, `User`, `Port`, and `IdentityFile` as local server parameters.
+It does not run `ssh -G`, `Match exec`, or jump-host commands, edit SSH configuration, or read private-key contents.
+These options are not included in the preview download above.
+`Include` and `Match` are not supported: either stops that sync while preserving existing profiles.
+Aliases requiring jump hosts, proxy commands, or multiple `IdentityFile` values are skipped; sync status explains the limits.
+
+A new alias creates a visible profile without starting a connection. An existing profile is associated only when
+its resolved host, user, and SSH port uniquely match; its ID, custom name, forwarding ports, and startup preference
+are preserved. Later syncs follow the alias rather than guessing from the display name.
+While sync is enabled, the source manages linked SSH fields; turn sync off to edit them manually.
+
+Sync skips connection updates while a tunnel or check is running. When syncing manually, scan again after stopping the connection and checks.
+A change to the host, user, or SSH port disables fixed entry and clears its Python, helper, and runtime paths.
+Check and install fixed entry again on the new target; sync itself performs no remote operations.
+A missing alias, unreadable configuration, or unsupported entry leaves the last saved profile intact.
+Deleting a linked profile remembers that alias as skipped; Settings provides **Restore skipped aliases** (`恢复已跳过的别名`).
+
+### Choose servers shown in the menu-bar panel (current source)
+
+Settings provides a visibility choice for each server, with all visible by default. A hidden server remains manageable
+from **Connection settings and logs** (`连接设置与日志…`). Its active tunnel, reconnection, and startup connection
+preferences remain independent. All profiles may be hidden and later restored from Settings.
 
 ## Experimental fixed entry (off by default)
 
@@ -184,7 +213,8 @@ CATunnel does not edit `.codex`, `.claude`, or shell files. Network transport an
 
 ## Login startup, automatic connections, and reconnection
 
-The panel's **Settings** (`设置`) page provides the first two controls; reconnection is configured in the server editor:
+The panel's **Settings** (`设置`) page provides login and startup-connection controls, plus SSH sync and menu-bar
+visibility in the current source. Reconnection is configured in the server editor:
 
 | Setting | Behavior |
 | --- | --- |
@@ -256,6 +286,9 @@ The legacy array format remains readable and is upgraded only on an explicit sav
 Duplicate IDs and conflicting server/port entries are rejected. Missing `identityFile` uses default keys/agent;
 missing `assessIPRisk`, `autoConnectOnLaunch`, or `keepRetryingForwardingFailure` defaults to false. `autoReconnect` is stored separately.
 The legacy `assessPing0` field remains readable and preserved but no longer triggers a check; no manual migration is needed.
+The current source uses optional `sshConfigAlias` links and the top-level `excludedSSHConfigAliases` array for deleted, skipped aliases;
+the document version stays `1`. In UI preferences, missing `sshConfigSyncEnabled` defaults to false and `hiddenPanelIDs` to an empty list,
+so all older profiles remain visible in the menu-bar panel.
 
 Unreadable, invalid, or unsupported-version files produce an error and block writes, preserving the original file.
 Correct the file and restart to reload it. A fresh launch alone does not create a server configuration file.
@@ -268,7 +301,10 @@ Passwords, private keys, and API credentials are not saved.
 | Symptom | What to check |
 | --- | --- |
 | Local proxy port unavailable | Proxy is running, port is correct, and HTTP/mixed mode is supported |
-| Terminal SSH works, app fails | Terminal may rely on aliases, jump hosts, or SSH config; verify actual host, user, port, and agent |
+| Terminal SSH works, app fails | Verify saved or synced host, user, port, and agent; jump hosts or other SSH options used by the terminal may be unsupported |
+| SSH changes have not applied | Enable sync and inspect its status; stop that profile's tunnel and checks, then sync again |
+| Deleted SSH alias does not return | Deletion remembers the skipped alias; restore skipped aliases in Settings |
+| Server missing from the menu-bar panel | Check its visibility setting; connection details still provides access |
 | Unknown or changed host key | Verify the fingerprint independently before updating trust; do not disable host verification |
 | Key authentication fails | Check key path, permissions, user, and agent; the app does not prompt for a password |
 | Remote port occupied or forwarding refused | Choose an available loopback port or ask the administrator about SSH policy; do not kill unknown processes |

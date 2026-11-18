@@ -19,13 +19,15 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var fixedEntryHelperPath: String?
     public var fixedEntryRuntimePath: String?
     public var fixedEntryPythonPath: String?
+    public var sshConfigAlias: String?
 
     public init(id: String, name: String, host: String, user: String, sshPort: Int,
                 remotePort: Int, localPort: Int, autoReconnect: Bool,
                 identityFile: String? = nil, assessIPRisk: Bool = false, assessPing0: Bool = false,
                 autoConnectOnLaunch: Bool = false, keepRetryingForwardingFailure: Bool = false,
                 useFixedEntry: Bool = false, fixedEntryHelperPath: String? = nil,
-                fixedEntryRuntimePath: String? = nil, fixedEntryPythonPath: String? = nil) {
+                fixedEntryRuntimePath: String? = nil, fixedEntryPythonPath: String? = nil,
+                sshConfigAlias: String? = nil) {
         self.id = id; self.name = name; self.host = host; self.user = user
         self.sshPort = sshPort; self.remotePort = remotePort; self.localPort = localPort
         self.autoReconnect = autoReconnect
@@ -38,12 +40,13 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.fixedEntryHelperPath = fixedEntryHelperPath
         self.fixedEntryRuntimePath = fixedEntryRuntimePath
         self.fixedEntryPythonPath = fixedEntryPythonPath
+        self.sshConfigAlias = sshConfigAlias
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, host, user, sshPort, remotePort, localPort, autoReconnect, identityFile, assessIPRisk
         case autoConnectOnLaunch, assessPing0, keepRetryingForwardingFailure
-        case useFixedEntry, fixedEntryHelperPath, fixedEntryRuntimePath, fixedEntryPythonPath
+        case useFixedEntry, fixedEntryHelperPath, fixedEntryRuntimePath, fixedEntryPythonPath, sshConfigAlias
     }
 
     public init(from decoder: Decoder) throws {
@@ -65,6 +68,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         fixedEntryHelperPath = try values.decodeIfPresent(String.self, forKey: .fixedEntryHelperPath)
         fixedEntryRuntimePath = try values.decodeIfPresent(String.self, forKey: .fixedEntryRuntimePath)
         fixedEntryPythonPath = try values.decodeIfPresent(String.self, forKey: .fixedEntryPythonPath)
+        sshConfigAlias = try values.decodeIfPresent(String.self, forKey: .sshConfigAlias)
     }
 
     public var expandedIdentityFile: String? {
@@ -92,6 +96,11 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
               sshPort: 22, remotePort: 17892, localPort: 7890, autoReconnect: true)
     }
 
+    public static func isValidSSHConfigAlias(_ alias: String) -> Bool {
+        alias.range(of: "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$", options: .regularExpression)
+            == alias.startIndex..<alias.endIndex
+    }
+
     public func validate() throws {
         func matches(_ value: String, _ pattern: String) -> Bool {
             value.range(of: pattern, options: .regularExpression) == value.startIndex..<value.endIndex
@@ -102,6 +111,9 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               name.count <= 80, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
             throw ProfileValidationError.invalidName
+        }
+        if let sshConfigAlias, !Self.isValidSSHConfigAlias(sshConfigAlias) {
+            throw ProfileValidationError.invalidSSHConfigAlias
         }
         guard host.count <= 253,
               matches(host, "^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$"),
@@ -148,10 +160,12 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
 
 public enum ProfileValidationError: LocalizedError {
     case invalidID, invalidName, invalidHost, invalidUser, invalidPort, invalidIdentityFile, invalidFixedEntryPath, invalidFixedEntryPythonPath, exampleHost
+    case invalidSSHConfigAlias
     public var errorDescription: String? {
         switch self {
         case .invalidID: return "服务器标识格式无效。"
         case .invalidName: return "请输入 1–80 字的服务器名称，且不要包含控制字符。"
+        case .invalidSSHConfigAlias: return "SSH 配置别名格式无效。"
         case .invalidHost: return "请输入有效的 IPv4 地址或主机名。"
         case .invalidUser: return "SSH 用户名格式无效。"
         case .invalidPort: return "端口必须在 1–65535 之间。"

@@ -59,6 +59,7 @@ struct CheckRunner {
             ("invalid start and idempotent stop", invalidStart)
         ] + SetupChecks.checks + Ping0Checks.checks + FixedEntryProfileChecks.checks + RemoteInspectionChecks.checks
             + FixedEntryGatewayChecks.checks + FixedEntryCoreChecks.checks + FixedEntryRenewalChecks.checks + FixedEntryInstallerChecks.checks
+            + SSHConfigImportChecks.checks
         var failures = 0
         for (name, check) in checks {
             do { try await check(); print("PASS: \(name)") }

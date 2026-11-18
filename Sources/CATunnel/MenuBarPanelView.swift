@@ -74,8 +74,13 @@ struct MenuBarPanelView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityIdentifier("panel-profile-error")
                         }
-                        if let profile = store.selectedProfile {
+                        if !hiddenActiveProfiles.isEmpty {
+                            hiddenConnectionsNotice
+                        }
+                        if let profile = store.panelSelectedProfile {
                             serverPage(profile)
+                        } else if !store.profiles.isEmpty {
+                            hiddenServersEmptyState
                         } else {
                             ServerListEmptyState(compact: true, canAdd: store.configurationError == nil,
                                                  identifierPrefix: "panel", onAdd: addServer,
@@ -106,16 +111,16 @@ struct MenuBarPanelView: View {
             ScrollViewReader { reader in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(store.profiles.enumerated()), id: \.element.id) { index, profile in
+                        ForEach(Array(store.panelProfiles.enumerated()), id: \.element.id) { index, profile in
                             serverTab(profile, index: index)
                                 .id(profile.id)
                         }
                     }
                 }
-                .onAppear { reader.scrollTo(store.selectedID, anchor: .trailing) }
-                .onChange(of: store.selectedID) { id in reader.scrollTo(id, anchor: .trailing) }
-                .onChange(of: store.profiles.map(\.id)) { _ in
-                    reader.scrollTo(store.selectedID, anchor: .trailing)
+                .onAppear { reader.scrollTo(store.panelSelectedID, anchor: .trailing) }
+                .onChange(of: store.panelSelectedID) { id in reader.scrollTo(id, anchor: .trailing) }
+                .onChange(of: store.panelProfiles.map(\.id)) { _ in
+                    reader.scrollTo(store.panelSelectedID, anchor: .trailing)
                 }
                 .accessibilityIdentifier("server-tabs")
                 .captureLayoutEvidence("server-tabs")
@@ -140,9 +145,9 @@ struct MenuBarPanelView: View {
 
     private func serverTab(_ profile: ServerProfile, index: Int) -> some View {
         let phase = phasePresentation(store.status(for: profile.id).phase)
-        let selected = store.selectedID == profile.id
+        let selected = store.panelSelectedID == profile.id
         return Button {
-            store.selectedID = profile.id
+            store.selectPanelProfile(profile.id)
             store.showingAppearanceSettings = false
         } label: {
             VStack(spacing: 1) {
@@ -178,6 +183,54 @@ struct MenuBarPanelView: View {
     private func addServer() {
         guard store.configurationError == nil else { return }
         ProfileEditorWindow.shared.show(profile: .draft(), isNew: true, store: store)
+    }
+
+    private var hiddenActiveProfiles: [ServerProfile] {
+        store.profiles.filter {
+            !store.isVisibleInPanel($0.id) && isActive(store.status(for: $0.id).phase)
+        }
+    }
+
+    private var hiddenConnectionsNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Label("\(hiddenActiveProfiles.count) 台隐藏服务器仍在连接或重试。", systemImage: "eye.slash")
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if !store.panelProfiles.isEmpty {
+                Button("管理连接", action: showDetails)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("panel-hidden-connections-manage")
+            }
+        }
+        .font(panelFont(size: 10))
+        .foregroundStyle(.secondary)
+        .accessibilityIdentifier("panel-hidden-connections")
+        .captureLayoutEvidence("panel-hidden-connections")
+    }
+
+    private var hiddenServersEmptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("菜单栏未显示服务器", systemImage: "eye.slash")
+                .font(panelFont(size: 15, weight: .semibold))
+            Text("所有服务器均已隐藏。可在设置中重新选择显示，现有连接与启动设置保持不变。")
+                .font(panelFont(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("选择显示的服务器") {
+                store.showingAppearanceSettings = true
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .accessibilityIdentifier("panel-hidden-servers-settings")
+            Button("管理所有服务器", action: showDetails)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("panel-hidden-servers-manage")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("panel-hidden-servers-empty")
+        .captureLayoutEvidence("panel-hidden-servers-empty")
     }
 
     private func removeServer(_ profile: ServerProfile) {
@@ -505,18 +558,23 @@ struct MenuBarPanelView: View {
                 .font(panelFont(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            Button(action: showDetails) {
+            Button {
+                if let profile = store.panelSelectedProfile {
+                    store.selectPanelProfile(profile.id)
+                }
+                showDetails()
+            } label: {
                 Label("连接详情", systemImage: "sidebar.right")
             }
             .accessibilityIdentifier("panel-details")
             Button {
-                store.copyProxy(store.selectedID)
+                store.copyProxy(store.panelSelectedID)
             } label: {
                 Label("复制代理", systemImage: "doc.on.doc")
                     .labelStyle(.iconOnly)
             }
             .help("复制当前服务器的 HTTP 代理地址")
-            .disabled(store.selectedProfile == nil)
+            .disabled(store.panelSelectedProfile == nil)
             .accessibilityIdentifier("panel-copy-proxy")
             Button {
                 store.showingAppearanceSettings.toggle()
@@ -524,7 +582,7 @@ struct MenuBarPanelView: View {
                 Image(systemName: "gearshape")
                     .foregroundStyle(store.showingAppearanceSettings ? Color.accentColor : Color.primary)
             }
-            .help("设置：登录启动、服务器自动连接与外观")
+            .help("设置：菜单栏显示、登录启动、服务器自动连接与外观")
             .accessibilityLabel("设置")
             .accessibilityValue(store.showingAppearanceSettings ? "已展开" : "已收起")
             .accessibilityIdentifier("panel-appearance-settings")

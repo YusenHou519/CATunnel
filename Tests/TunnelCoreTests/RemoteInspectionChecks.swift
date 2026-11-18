@@ -196,11 +196,13 @@ enum RemoteInspectionChecks {
         let response = try discovery()
         var calls = 0
         let service = RemotePythonDiscovery(executionContext: .init()) { _, _, _, _, _ in calls += 1; return response }
-        let before = try JSONEncoder().encode(profile)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(profile)
         let result = try await service.run(profile)
         try expect(result.candidates == [.init(path: "/opt/python3", version: "3.12.0", isSupported: true)] && !result.isPartial,
                    "Valid discovery candidate changed")
-        try expect(calls == 1 && (try JSONEncoder().encode(profile)) == before, "Discovery changed persisted profile")
+        try expect(calls == 1 && (try encoder.encode(profile)) == before, "Discovery changed persisted profile")
     }
 
     private static func invalidDiscovery() throws {

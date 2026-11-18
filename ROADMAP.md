@@ -12,13 +12,15 @@ CATunnel 通过 GitHub 分发，不计划上架 App Store。以下是当前方�
 - [x] 独立隧道管理、意外断开后自动重连。
 - [x] 服务连通性检测，以及默认关闭的 Net.Coffee IP 风险参考。
 - [x] 面板宽度、字体大小、登录启动与每台服务器启动后自动连接设置。
+- [x] 当前源码：可选只读同步 SSH 配置中的具体别名，保留本地连接偏好并延后活动条目的更新。
+- [x] 当前源码：逐台控制菜单栏显示，独立于隧道、自动连接与详情管理。
 - [x] 离线检查、隔离 SSH 集成检查和双架构 GitHub CI。
 - [x] Apple Silicon / Intel GitHub 预览包与中英文文档。
 
 ## 优先开发 · Next
 
 - [ ] **英文界面 / English UI**：翻译面板、设置、引导和错误提示，验证窄面板布局。
-- [ ] **SSH 别名 / SSH aliases**：先定义支持的配置字段与解析方式，再实现主机选择。
+- [ ] **更完整的 SSH 配置 / Broader SSH configuration**：在有限别名同步之外评估更多配置语义。
   不能直接继承全部 `~/.ssh/config`；需防止意外执行 `ProxyCommand`、`LocalCommand`
   或创建配置中已有的 `RemoteForward`、`LocalForward`、`DynamicForward`。
 - [ ] **跳板机 / Jump hosts**：设计显式 `ProxyJump` 配置，保留严格主机指纹校验，
